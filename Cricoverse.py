@@ -577,6 +577,8 @@ class Match:
         self.is_free_hit = False
         self.last_wicket_ball = None
         self.drs_in_progress = False
+        self.team_x_timeout_used = False
+        self.team_y_timeout_used = False
         
         # Timers and messages
         self.team_join_end_time: Optional[float] = None
@@ -1123,6 +1125,87 @@ async def handle_timeout_penalties(context: ContextTypes.DEFAULT_TYPE, group_id:
                 await check_over_complete(context, group_id, match)
             else:
                 await execute_ball(context, group_id, match)
+
+async def taunt_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Light Taunt"""
+
+    chat = update.effective_chat
+    user = update.effective_user
+
+    if chat.id not in active_matches:
+        await update.message.reply_text("⚠️ No active match right now.")
+        return
+
+    taunts = [
+        "😏 Is that all you got? We're just warming up!",
+        "🤔 Did you even practice? This is too easy!",
+        "😎 Thanks for the practice session! Who's next?",
+        "🎭 Are we playing cricket or waiting for miracles?",
+        "⚡ Blink and you'll miss our victory! Too fast for you?"
+    ]
+
+    msg = (
+        f"💬 <b>{user.first_name}</b> throws a taunt!\n"
+        "━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"{random.choice(taunts)}"
+    )
+
+    await update.message.reply_text(msg, parse_mode=ParseMode.HTML)
+
+async def celebrate_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Celebration GIF"""
+
+    chat = update.effective_chat
+    user = update.effective_user
+
+    if chat.id not in active_matches:
+        await update.message.reply_text("⚠️ No active match right now.")
+        return
+
+    celebration_gifs = [
+        "https://media.giphy.com/media/g9582DNuQppxC/giphy.gif",
+        "https://media.giphy.com/media/l0MYt5jPR6QX5pnqM/giphy.gif",
+        "https://media.giphy.com/media/Is1O1TWV0LEJi/giphy.gif"
+    ]
+
+    caption = (
+        f"🎉 <b>{user.first_name}</b> celebrates in style! 🎊\n\n"
+        "<i>\"YESSS! That's how it's done!\"</i> 🔥"
+    )
+
+    await update.message.reply_animation(
+        animation=random.choice(celebration_gifs),
+        caption=caption,
+        parse_mode=ParseMode.HTML
+    )
+
+
+async def huddle_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Team Motivation"""
+
+    chat = update.effective_chat
+    user = update.effective_user
+
+    if chat.id not in active_matches:
+        await update.message.reply_text("⚠️ No active match right now.")
+        return
+
+    huddle_messages = [
+        "🔥 <b>COME ON TEAM!</b> We got this! Let's show them what we're made of! 💪",
+        "⚡ <b>FOCUS UP!</b> One ball at a time. We're in this together! 🤝",
+        "🎯 <b>STAY CALM!</b> Stick to the plan. Victory is ours! 🏆",
+        "💥 <b>LET'S GO!</b> Time to dominate! Show no mercy! ⚔️",
+        "🌟 <b>BELIEVE!</b> We've trained for this. Execute perfectly! ✨"
+    ]
+
+    msg = (
+        f"📣 <b>{user.first_name}</b> calls a team huddle!\n"
+        "━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"{random.choice(huddle_messages)}"
+    )
+
+    await update.message.reply_text(msg, parse_mode=ParseMode.HTML)
+
 
 # Start command handler
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2119,7 +2202,7 @@ async def request_batsman_selection(context: ContextTypes.DEFAULT_TYPE, group_id
     await context.bot.send_message(group_id, text, parse_mode=ParseMode.HTML)
 
 async def batting_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle Batting Selection - FIXED with Confirmations"""
+    """Handle Batting Selection with Proper Confirmations"""
     chat = update.effective_chat
     user = update.effective_user
     
@@ -2168,14 +2251,12 @@ async def batting_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if bat_team.current_batsman_idx is None:
         bat_team.current_batsman_idx = player_idx
         
-        # ✅ FIX: Add proper confirmation message
-        await context.bot.send_message(
-            chat.id, 
-            f"✅ <b>STRIKER SELECTED</b>\n"
-            f"🏏 {player_tag} will face the first ball!\n\n"
-            f"👇 Now select the Non-Striker using /batting (serial)",
-            parse_mode=ParseMode.HTML
-        )
+        # ✅ FIXED: Add confirmation
+        confirm_msg = f"✅ <b>STRIKER SELECTED</b>\n"
+        confirm_msg += f"🏏 {player_tag} will face the first ball!\n\n"
+        confirm_msg += f"👇 Now select the Non-Striker using /batting (serial)"
+        
+        await context.bot.send_message(chat.id, confirm_msg, parse_mode=ParseMode.HTML)
         
     # Case B: Selecting NON-STRIKER
     elif bat_team.current_non_striker_idx is None:
@@ -2189,14 +2270,12 @@ async def batting_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if match.batsman_selection_task:
             match.batsman_selection_task.cancel()
         
-        # ✅ FIX: Better confirmation
-        await context.bot.send_message(
-            chat.id,
-            f"✅ <b>NON-STRIKER SELECTED</b>\n"
-            f"👀 {player_tag} will be at the other end!\n\n"
-            f"⚾ <b>Batting Order Complete!</b> Waiting for bowler...",
-            parse_mode=ParseMode.HTML
-        )
+        # ✅ FIXED: Better confirmation
+        confirm_msg = f"✅ <b>NON-STRIKER SELECTED</b>\n"
+        confirm_msg += f"👀 {player_tag} will be at the other end!\n\n"
+        confirm_msg += f"⚾ <b>Batting Order Complete!</b> Waiting for bowler..."
+        
+        await context.bot.send_message(chat.id, confirm_msg, parse_mode=ParseMode.HTML)
         
         await request_bowler_selection(context, chat.id, match)
     
@@ -2505,7 +2584,7 @@ async def bowling_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await execute_ball(context, chat.id, match)
 
 async def execute_ball(context: ContextTypes.DEFAULT_TYPE, group_id: int, match: Match):
-    """Pre-Ball Phase with GIF - FIXED"""
+    """Pre-Ball Phase with GIF and DM Button"""
     
     bat_team = match.current_batting_team
     bowl_team = match.current_bowling_team
@@ -2518,7 +2597,7 @@ async def execute_ball(context: ContextTypes.DEFAULT_TYPE, group_id: int, match:
     non_striker_tag = f"<a href='tg://user?id={non_striker.user_id}'>{non_striker.first_name}</a>"
     bowler_tag = f"<a href='tg://user?id={bowler.user_id}'>{bowler.first_name}</a>"
     
-    text = f"🏏 <b>NEXT BALL!</b>\n"
+    text = f"🏏 <b>BALL!</b>\n"
     text += "━━━━━━━━━━━━━━━\n"
     text += f"🏏 <b>Striker:</b> {striker_tag}\n"
     text += f"👀 <b>Non-Striker:</b> {non_striker_tag}\n"
@@ -2528,20 +2607,24 @@ async def execute_ball(context: ContextTypes.DEFAULT_TYPE, group_id: int, match:
     if match.is_free_hit:
         text += "⚡ <b>FREE HIT BALL!</b>\n"
     
-    text += f"📣 <b>{bowler.first_name},</b> check your DM to bowl!"
+    text += f"📣 <b>{bowler.first_name},</b> click below to bowl!"
     
-    # ✅ FIX: Add GIF
-    ball_gif = "https://t.me/cricoverse/48"  # Use a suitable cricket ball GIF
+    # ✅ FIXED: Add DM Button
+    keyboard = [[InlineKeyboardButton("📩 Open DM to Bowl", url=f"https://t.me/{context.bot.username}")]]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    ball_gif = "https://t.me/cricoverse/49"
     
     try:
         await context.bot.send_animation(
             group_id, 
             animation=ball_gif,
             caption=text,
+            reply_markup=reply_markup,
             parse_mode=ParseMode.HTML
         )
     except:
-        await context.bot.send_message(group_id, text, parse_mode=ParseMode.HTML)
+        await context.bot.send_message(group_id, text, reply_markup=reply_markup, parse_mode=ParseMode.HTML)
     
     # Send DM to Bowler
     dm_text = f"🎯 <b>Over {format_overs(bowl_team.balls)}</b>\n"
@@ -2831,7 +2914,7 @@ async def request_batsman_number(context: ContextTypes.DEFAULT_TYPE, group_id: i
     text += "⏳ <i>You have 45 seconds!</i>"
     
     # ✅ FIX: Add GIF
-    batting_gif = "https://t.me/cricoverse/47"  # Cricket batting GIF
+    batting_gif = "https://t.me/cricoverse/50"  # Cricket batting GIF
     
     try:
         await context.bot.send_animation(
@@ -2988,7 +3071,7 @@ async def handle_batsman_timeout(context: ContextTypes.DEFAULT_TYPE, group_id: i
         )
 
 async def process_ball_result(context: ContextTypes.DEFAULT_TYPE, group_id: int, match: Match):
-    """Calculate Result: Free Hit Logic & Proper Scoring"""
+    """Calculate Result with Run Rate & Required Run Rate"""
     
     bat_team = match.current_batting_team
     bowl_team = match.current_bowling_team
@@ -3004,6 +3087,46 @@ async def process_ball_result(context: ContextTypes.DEFAULT_TYPE, group_id: int,
     
     striker = bat_team.players[bat_team.current_batsman_idx]
     bowler = bowl_team.players[bowl_team.current_bowler_idx]
+    
+    # ===== WIDE BALL CHECK (30% Chance) =====
+    is_wide = random.random() < 0.30
+    
+    if is_wide:
+        bat_team.score += 1
+        bat_team.extras += 1
+        
+        gif_url = get_random_gif(MatchEvent.WIDE)
+        commentary = get_random_commentary("wide")
+        
+        msg = f"🏏 <b>Over {format_overs(bowl_team.balls)}</b>\n\n"
+        msg += f"🚫 <b>WIDE BALL!</b> (+1 Run)\n"
+        msg += f"💬 <i>{commentary}</i>\n\n"
+        msg += f"📊 <b>Score:</b> {bat_team.score}/{bat_team.wickets}"
+        
+        # ✅ FIXED: Add Run Rate
+        current_rr = round(bat_team.score / max(bat_team.overs, 0.1), 2)
+        msg += f"\n📈 <b>Run Rate:</b> {current_rr}"
+        
+        # ✅ FIXED: Add RRR if chasing
+        if match.innings == 2:
+            runs_needed = match.target - bat_team.score
+            balls_left = (match.total_overs * 6) - bat_team.balls
+            rrr = round((runs_needed / max(balls_left, 1)) * 6, 2) if balls_left > 0 else 0
+            msg += f"\n🎯 <b>Need:</b> {runs_needed} runs in {balls_left} balls (RRR: {rrr})"
+        
+        try:
+            if gif_url:
+                await context.bot.send_animation(group_id, animation=gif_url, caption=msg, parse_mode=ParseMode.HTML)
+            else:
+                await context.bot.send_message(group_id, msg, parse_mode=ParseMode.HTML)
+        except:
+            await context.bot.send_message(group_id, msg, parse_mode=ParseMode.HTML)
+        
+        # Wide doesn't count as legal ball
+        match.current_ball_data = {}
+        await asyncio.sleep(2)
+        await execute_ball(context, group_id, match)
+        return
     
     # ===== WICKET CHECK =====
     if bowler_num == batsman_num:
@@ -3032,7 +3155,6 @@ async def process_ball_result(context: ContextTypes.DEFAULT_TYPE, group_id: int,
             match.is_free_hit = False
             bowl_team.update_overs()
             
-            # Log ball
             match.ball_by_ball_log.append({
                 "over": format_overs(bowl_team.balls - 1),
                 "batsman": striker.first_name,
@@ -3052,11 +3174,9 @@ async def process_ball_result(context: ContextTypes.DEFAULT_TYPE, group_id: int,
             bowler.wickets += 1
             bowler.balls_bowled += 1
             
-            # Check for duck
             if striker.runs == 0:
                 striker.ducks = striker.ducks + 1 if hasattr(striker, 'ducks') else 1
             
-            # Store wicket info for DRS
             match.last_wicket_ball = {
                 "batsman": striker,
                 "bowler": bowler,
@@ -3084,7 +3204,6 @@ async def process_ball_result(context: ContextTypes.DEFAULT_TYPE, group_id: int,
             
             bowl_team.update_overs()
             
-            # Log ball
             match.ball_by_ball_log.append({
                 "over": format_overs(bowl_team.balls - 1),
                 "batsman": striker.first_name,
@@ -3096,16 +3215,14 @@ async def process_ball_result(context: ContextTypes.DEFAULT_TYPE, group_id: int,
             
             await asyncio.sleep(2)
             
-            # Check innings complete
-            if bat_team.is_all_out() or bat_team.balls >= match.total_overs * 6:
-                await end_innings(context, group_id, match)
+            # ✅ FIXED: Offer DRS to Captain (10 seconds timeout)
+            if bat_team.drs_remaining > 0:
+                await offer_drs_to_captain(context, group_id, match)
                 return
-            
-            # Request new batsman
-            bat_team.current_batsman_idx = None
-            match.waiting_for_batsman = True
-            await request_batsman_selection(context, group_id, match)
-            return
+            else:
+                # No DRS available, confirm wicket
+                await confirm_wicket_and_continue(context, group_id, match)
+                return
     
     # ===== RUNS SCORED =====
     else:
@@ -3116,13 +3233,11 @@ async def process_ball_result(context: ContextTypes.DEFAULT_TYPE, group_id: int,
         bowler.balls_bowled += 1
         bowler.runs_conceded += runs
         
-        # Track boundaries
         if runs == 4:
             striker.boundaries = striker.boundaries + 1 if hasattr(striker, 'boundaries') else 1
         elif runs == 6:
             striker.sixes = striker.sixes + 1 if hasattr(striker, 'sixes') else 1
         
-        # Select commentary
         if runs == 0:
             commentary_key = "dot"
             event = MatchEvent.DOT_BALL
@@ -3143,7 +3258,7 @@ async def process_ball_result(context: ContextTypes.DEFAULT_TYPE, group_id: int,
         elif runs == 5:
             commentary_key = "five"
             event = MatchEvent.RUNS_5
-        else:  # 6
+        else:
             commentary_key = "six"
             event = MatchEvent.RUNS_6
         
@@ -3159,6 +3274,17 @@ async def process_ball_result(context: ContextTypes.DEFAULT_TYPE, group_id: int,
         msg += f"💬 <i>{commentary}</i>\n\n"
         msg += f"📊 <b>Score:</b> {bat_team.score}/{bat_team.wickets}"
         
+        # ✅ FIXED: Add Run Rate
+        current_rr = round(bat_team.score / max(bat_team.overs, 0.1), 2)
+        msg += f"\n📈 <b>Run Rate:</b> {current_rr}"
+        
+        # ✅ FIXED: Add RRR if chasing
+        if match.innings == 2:
+            runs_needed = match.target - bat_team.score
+            balls_left = (match.total_overs * 6) - bat_team.balls
+            rrr = round((runs_needed / max(balls_left, 1)) * 6, 2) if balls_left > 0 else 0
+            msg += f"\n🎯 <b>Need:</b> {runs_needed} runs in {balls_left} balls (RRR: {rrr})"
+        
         try:
             if gif_url and runs > 0:
                 await context.bot.send_animation(group_id, animation=gif_url, caption=msg, parse_mode=ParseMode.HTML)
@@ -3169,7 +3295,6 @@ async def process_ball_result(context: ContextTypes.DEFAULT_TYPE, group_id: int,
         
         bowl_team.update_overs()
         
-        # Log ball
         match.ball_by_ball_log.append({
             "over": format_overs(bowl_team.balls - 1),
             "batsman": striker.first_name,
@@ -3179,18 +3304,14 @@ async def process_ball_result(context: ContextTypes.DEFAULT_TYPE, group_id: int,
             "is_wicket": False
         })
         
-        # ✅ FIX: Swap batsmen ONLY if odd runs
         if runs % 2 == 1:
             bat_team.swap_batsmen()
     
-    # Reset ball data
     match.current_ball_data = {}
     
-    # Check over complete
     if bowl_team.get_current_over_balls() == 0:
         await check_over_complete(context, group_id, match)
     else:
-        # Check innings end conditions
         if match.innings == 2 and bat_team.score >= match.target:
             await end_innings(context, group_id, match)
         elif bat_team.balls >= match.total_overs * 6:
@@ -3199,6 +3320,28 @@ async def process_ball_result(context: ContextTypes.DEFAULT_TYPE, group_id: int,
             await asyncio.sleep(2)
             await execute_ball(context, group_id, match)
 
+async def offer_drs_to_captain(context: ContextTypes.DEFAULT_TYPE, group_id: int, match: Match):
+    """Offer DRS to Captain with 10 second timeout"""
+    batting_captain = match.get_captain(match.current_batting_team)
+    batsman = match.last_wicket_ball["batsman"]
+    
+    captain_tag = f"<a href='tg://user?id={batting_captain.user_id}'>{batting_captain.first_name}</a>"
+    
+    msg = f"📺 <b>DRS AVAILABLE</b> 📺\n"
+    msg += "━━━━━━━━━━━━━━━\n"
+    msg += f"❌ <b>{batsman.first_name}</b> is given OUT!\n"
+    msg += f"👤 Captain {captain_tag}\n\n"
+    msg += f"🔄 <b>DRS Remaining:</b> {match.current_batting_team.drs_remaining}\n"
+    msg += "⏱ <b>You have 10 seconds to review!</b>\n\n"
+    msg += "👉 Use <code>/drs</code> to take review"
+    
+    await context.bot.send_message(group_id, msg, parse_mode=ParseMode.HTML)
+    
+    match.drs_in_progress = True
+    match.drs_offer_time = time.time()
+    
+    # 10 second timeout
+    asyncio.create_task(drs_timeout_handler(context, group_id, match))
 
 async def offer_drs(context: ContextTypes.DEFAULT_TYPE, group_id: int, match: Match):
     """Offer DRS to batting captain after wicket"""
@@ -3249,6 +3392,25 @@ async def offer_drs(context: ContextTypes.DEFAULT_TYPE, group_id: int, match: Ma
     # Set timeout for DRS decision
     asyncio.create_task(drs_decision_timeout(context, group_id, match))
 
+async def drs_timeout_handler(context: ContextTypes.DEFAULT_TYPE, group_id: int, match: Match):
+    """Handle 10 second DRS timeout"""
+    await asyncio.sleep(10)
+    
+    if not match.drs_in_progress:
+        return
+    
+    # Timeout - No DRS taken
+    match.drs_in_progress = False
+    
+    await context.bot.send_message(
+        group_id,
+        "⏱ <b>DRS Timeout!</b> Decision stands. Wicket confirmed.",
+        parse_mode=ParseMode.HTML
+    )
+    
+    await asyncio.sleep(1)
+    await confirm_wicket_and_continue(context, group_id, match)
+
 async def drs_decision_timeout(context: ContextTypes.DEFAULT_TYPE, group_id: int, match: Match):
     """Handle DRS decision timeout"""
     await asyncio.sleep(30)
@@ -3262,7 +3424,7 @@ async def drs_decision_timeout(context: ContextTypes.DEFAULT_TYPE, group_id: int
 
 # DRS command
 async def drs_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /drs command for review"""
+    """Handle /drs command - Captain only"""
     chat = update.effective_chat
     user = update.effective_user
     
@@ -3284,7 +3446,7 @@ async def drs_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     batting_captain = match.get_captain(match.current_batting_team)
     if user.id != batting_captain.user_id:
         await update.message.reply_text(
-            f"Only {match.current_batting_team.name} Captain can request DRS."
+            f"⚠️ Only {match.current_batting_team.name} Captain can request DRS."
         )
         return
     
@@ -3294,91 +3456,95 @@ async def drs_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await process_drs_review(context, chat.id, match)
 
+
 async def process_drs_review(context: ContextTypes.DEFAULT_TYPE, group_id: int, match: Match):
-    """Process DRS review with dramatic countdown"""
+    """Process DRS with 30% overturn chance"""
     batsman = match.last_wicket_ball["batsman"]
     
-    drs_text = "DRS Review Requested\n\n"
-    drs_text += "Checking with third umpire...\n"
-    drs_text += "Please wait..."
+    drs_text = "📺 <b>DRS REVIEW IN PROGRESS</b>\n\n"
+    drs_text += "🔍 Checking with third umpire...\n"
+    drs_text += "⏳ Please wait..."
     
     gif_url = get_random_gif(MatchEvent.DRS_REVIEW)
     
     try:
         if gif_url:
-            msg = await context.bot.send_animation(
-                chat_id=group_id,
-                animation=gif_url,
-                caption=drs_text
-            )
+            msg = await context.bot.send_animation(group_id, animation=gif_url, caption=drs_text, parse_mode=ParseMode.HTML)
         else:
-            msg = await context.bot.send_message(
-                chat_id=group_id,
-                text=drs_text
-            )
-    except Exception as e:
-        logger.error(f"Error sending DRS review message: {e}")
-        msg = await context.bot.send_message(
-            chat_id=group_id,
-            text=drs_text
-        )
+            msg = await context.bot.send_message(group_id, drs_text, parse_mode=ParseMode.HTML)
+    except:
+        msg = await context.bot.send_message(group_id, drs_text, parse_mode=ParseMode.HTML)
     
-    # Wait for dramatic effect
     await asyncio.sleep(3)
     
-    # 30% chance to overturn
+    # 30% overturn chance
     is_overturned = random.random() < 0.30
     
     if is_overturned:
         # NOT OUT
+        batsman.is_out = False
+        match.current_batting_team.wickets -= 1
+        match.current_batting_team.out_players_indices.discard(match.current_batting_team.current_batsman_idx)
+        
         gif_url = get_random_gif(MatchEvent.DRS_NOT_OUT)
         
-        result_text = "DRS Result\n\n"
-        result_text += "Decision: NOT OUT\n\n"
-        result_text += f"{batsman.first_name} survives!\n"
-        result_text += "The original decision has been overturned.\n\n"
-        result_text += f"DRS Remaining: {match.current_batting_team.drs_remaining}\n\n"
-        result_text += f"Score: {match.current_batting_team.score}/{match.current_batting_team.wickets}"
+        result_text = "📺 <b>DRS RESULT</b>\n\n"
+        result_text += "✅ <b>NOT OUT!</b>\n\n"
+        result_text += f"🎉 {batsman.first_name} survives!\n"
+        result_text += "Decision overturned.\n\n"
+        result_text += f"🔄 DRS Remaining: {match.current_batting_team.drs_remaining}"
         
         try:
             if gif_url:
-                await context.bot.send_animation(
-                    chat_id=group_id,
-                    animation=gif_url,
-                    caption=result_text
-                )
+                await context.bot.send_animation(group_id, animation=gif_url, caption=result_text, parse_mode=ParseMode.HTML)
             else:
-                await context.bot.send_message(
-                    chat_id=group_id,
-                    text=result_text
-                )
-        except Exception as e:
-            logger.error(f"Error sending DRS not out message: {e}")
-            await context.bot.send_message(
-                chat_id=group_id,
-                text=result_text
-            )
-        
-        # Update stats
-        batsman.balls_faced += 1
-        match.last_wicket_ball["bowler"].balls_bowled += 1
-        match.current_bowling_team.update_overs()
-        
-        # Log ball
-        match.ball_by_ball_log.append({
-            "over": format_overs(match.current_bowling_team.balls - 1),
-            "batsman": batsman.first_name,
-            "bowler": match.last_wicket_ball["bowler"].first_name,
-            "result": "Not Out (DRS)",
-            "runs": 0,
-            "is_wicket": False
-        })
+                await context.bot.send_message(group_id, result_text, parse_mode=ParseMode.HTML)
+        except:
+            await context.bot.send_message(group_id, result_text, parse_mode=ParseMode.HTML)
         
         await asyncio.sleep(2)
-        await check_over_complete(context, group_id, match)
+        
+        # Continue with same batsman
+        if match.current_bowling_team.get_current_over_balls() == 0:
+            await check_over_complete(context, group_id, match)
+        else:
+            await execute_ball(context, group_id, match)
     else:
         # OUT confirmed
-        await confirm_wicket(context, group_id, match, drs_used=True, drs_successful=False)
+        gif_url = get_random_gif(MatchEvent.DRS_OUT)
+        
+        result_text = "📺 <b>DRS RESULT</b>\n\n"
+        result_text += "❌ <b>OUT!</b>\n\n"
+        result_text += "Decision stands.\n\n"
+        result_text += f"📊 {batsman.first_name}: {batsman.runs} ({batsman.balls_faced})\n"
+        result_text += f"🔄 DRS Remaining: {match.current_batting_team.drs_remaining}"
+        
+        try:
+            if gif_url:
+                await context.bot.send_animation(group_id, animation=gif_url, caption=result_text, parse_mode=ParseMode.HTML)
+            else:
+                await context.bot.send_message(group_id, result_text, parse_mode=ParseMode.HTML)
+        except:
+            await context.bot.send_message(group_id, result_text, parse_mode=ParseMode.HTML)
+        
+        await asyncio.sleep(2)
+        await confirm_wicket_and_continue(context, group_id, match)
+
+async def confirm_wicket_and_continue(context: ContextTypes.DEFAULT_TYPE, group_id: int, match: Match):
+    """Confirm wicket and continue game"""
+    
+    # Check innings complete
+    if match.current_batting_team.is_all_out() or match.current_batting_team.balls >= match.total_overs * 6:
+        await end_innings(context, group_id, match)
+        return
+    
+    # ✅ FIXED: Request new batsman properly
+    match.current_batting_team.current_batsman_idx = None
+    match.waiting_for_batsman = True
+    
+    await asyncio.sleep(1)
+    await request_batsman_selection(context, group_id, match)
+
 
 async def confirm_wicket(context: ContextTypes.DEFAULT_TYPE, group_id: int, match: Match, drs_used: bool, drs_successful: bool):
     """Confirm wicket and update match state"""
@@ -3460,17 +3626,15 @@ async def confirm_wicket(context: ContextTypes.DEFAULT_TYPE, group_id: int, matc
         await request_batsman_selection(context, group_id, match)
 
 async def check_over_complete(context: ContextTypes.DEFAULT_TYPE, group_id: int, match: Match):
-    """End of Over: Show Stats (NO automatic swap - already done in process_ball_result)"""
+    """End of Over with Timeout Option"""
     
     bat_team = match.current_batting_team
     bowl_team = match.current_bowling_team
     
-    # Get Current Players
     striker = bat_team.players[bat_team.current_batsman_idx]
     non_striker = bat_team.players[bat_team.current_non_striker_idx]
     bowler = bowl_team.players[bowl_team.current_bowler_idx]
     
-    # Add bowler to history
     bowl_team.bowler_history.append(bowl_team.current_bowler_idx)
     
     rr = round(bat_team.score / max(bat_team.overs, 1), 2)
@@ -3483,19 +3647,106 @@ async def check_over_complete(context: ContextTypes.DEFAULT_TYPE, group_id: int,
     summary += f"👀 Non-Strike: {non_striker.first_name} ({non_striker.runs})\n"
     summary += f"⚾ Bowler: {bowler.first_name} ({bowler.wickets}/{bowler.runs_conceded})"
     
+    # Check if timeout available
+    timeout_available = False
+    if bat_team == match.team_x and not match.team_x_timeout_used:
+        timeout_available = True
+    elif bat_team == match.team_y and not match.team_y_timeout_used:
+        timeout_available = True
+    
+    if timeout_available:
+        summary += f"\n\n⏸ Host can take Strategic Timeout: /timeout"
+    
     await context.bot.send_message(group_id, summary, parse_mode=ParseMode.HTML)
     
     await asyncio.sleep(2)
     
-    # Check Innings End
     if bat_team.balls >= match.total_overs * 6:
         await end_innings(context, group_id, match)
     elif match.innings == 2 and bat_team.score >= match.target:
         await end_innings(context, group_id, match)
     else:
-        # Next Over - New Bowler needed
         bowl_team.current_bowler_idx = None
         await request_bowler_selection(context, group_id, match)
+
+async def timeout_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Strategic Timeout - Host Only"""
+    
+    chat = update.effective_chat
+    user = update.effective_user
+
+    # 1️⃣ Check active match
+    if chat.id not in active_matches:
+        await update.message.reply_text("⚠️ No active match running.")
+        return
+
+    match = active_matches[chat.id]
+
+    # 2️⃣ Check host
+    if user.id != match.host_id:
+        await update.message.reply_text("⚠️ Only the Host can call a strategic timeout!")
+        return
+
+    # 3️⃣ Check match state safety
+    if not match.current_batting_team or not match.current_bowling_team:
+        await update.message.reply_text("⚠️ Timeout not allowed at this stage.")
+        return
+
+    bat_team = match.current_batting_team
+
+    # 4️⃣ Initialize timeout flags (safe init)
+    if not hasattr(match, "team_x_timeout_used"):
+        match.team_x_timeout_used = False
+    if not hasattr(match, "team_y_timeout_used"):
+        match.team_y_timeout_used = False
+
+    # 5️⃣ Check if timeout already used
+    if bat_team == match.team_x and match.team_x_timeout_used:
+        await update.message.reply_text("⚠️ Team X has already used its timeout!")
+        return
+    if bat_team == match.team_y and match.team_y_timeout_used:
+        await update.message.reply_text("⚠️ Team Y has already used its timeout!")
+        return
+
+    # 6️⃣ Mark timeout as used
+    if bat_team == match.team_x:
+        match.team_x_timeout_used = True
+    else:
+        match.team_y_timeout_used = True
+
+    match.last_activity = time.time()  # prevent auto-cleanup
+
+    # 7️⃣ Timeout message
+    msg = (
+        "⏸ <b>STRATEGIC TIMEOUT</b> ⏸\n"
+        "━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"🛡 <b>{bat_team.name}</b> takes a break!\n\n"
+        "⏱ <b>Duration:</b> 60 Seconds\n\n"
+        "✅ Strike can be changed\n"
+        "✅ Bowler can be changed\n"
+        "✅ Team discussion allowed\n\n"
+        "<i>Game will resume automatically...</i>"
+    )
+
+    await update.message.reply_text(msg, parse_mode=ParseMode.HTML)
+
+    # 8️⃣ Pause game for 60 seconds
+    await asyncio.sleep(60)
+
+    # 9️⃣ Resume announcement
+    await context.bot.send_message(
+        chat.id,
+        "⏱ <b>Timeout Over!</b>\nGame resuming now...",
+        parse_mode=ParseMode.HTML
+    )
+
+    await asyncio.sleep(2)
+
+    # 🔟 Force new bowler selection (strategy impact)
+    match.current_bowling_team.current_bowler_idx = None
+    match.waiting_for_bowler = True
+
+    await request_bowler_selection(context, chat.id, match)
 
 async def end_innings(context: ContextTypes.DEFAULT_TYPE, group_id: int, match: Match):
     """End current innings"""
@@ -4635,6 +4886,11 @@ def main():
     application.add_handler(CommandHandler("mystats", mystats_command))
     application.add_handler(CommandHandler("h2h", h2h_command))
     application.add_handler(CommandHandler("players", players_command)) # Players list
+    application.add_handler(CommandHandler("timeout", timeout_command))
+    application.add_handler(CommandHandler("huddle", huddle_command))
+    application.add_handler(CommandHandler("taunt", taunt_command))
+    application.add_handler(CommandHandler("celebrate", celebrate_command))
+
     
     # Owner/Admin commands
     application.add_handler(CommandHandler("broadcast", broadcast_command))
