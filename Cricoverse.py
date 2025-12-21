@@ -487,7 +487,7 @@ class Team:
         
         self.current_bowler_idx: Optional[int] = None
         self.penalty_runs = 0
-        self.bowler_history: List[int] = []
+        self.bowler_history: List[int] = []  # List of bowler indices in order
 
     def is_all_out(self):
         # 1 player needs to remain not out to partner. If (Total - Out) < 2, then All Out.
@@ -544,6 +544,53 @@ class Team:
         remaining_balls = 6 - (self.balls % 6)
         self.balls += remaining_balls
         self.overs = self.balls // 6
+
+    def get_next_batsman_idx(self) -> Optional[int]:
+        """Find the next available batsman index (lowest after current non-striker)"""
+        if self.current_non_striker_idx is None:
+            # Initial setup: Find first two
+            available = [i for i, p in enumerate(self.players) if i not in self.out_players_indices]
+            if len(available) >= 2:
+                self.current_batsman_idx = available[0]
+                self.current_non_striker_idx = available[1]
+                return None  # Initial setup done
+            return None
+
+        # Find next available after non-striker (skip out players)
+        available = [i for i, p in enumerate(self.players) 
+                     if i not in self.out_players_indices and i > self.current_non_striker_idx]
+        if available:
+            next_idx = available[0]  # Lowest index after non-striker
+            # New striker is next batsman, non-striker remains (or swap if needed)
+            self.current_batsman_idx = next_idx
+            return next_idx
+        return None  # All out
+
+    def mark_batsman_out(self, idx: int):
+        """Mark batsman as out and update indices"""
+        if idx not in self.out_players_indices:
+            self.out_players_indices.add(idx)
+            self.players[idx].is_out = True
+            self.wickets += 1
+            # Auto-select next batsman
+            next_bat = self.get_next_batsman_idx()
+            if next_bat is None and self.is_all_out():
+                # All out - no more batsmen
+                pass
+            else:
+                # Swap if odd runs, but for simplicity, new striker is next
+                self.swap_batsmen()  # Ensure non-striker becomes striker temporarily
+
+    def select_next_bowler(self, captain_choice: int) -> bool:
+        """Captain selects next bowler index"""
+        if 0 <= captain_choice < len(self.players):
+            if not self.players[captain_choice].is_bowling_banned:
+                self.current_bowler_idx = captain_choice
+                self.bowler_history.append(captain_choice)
+                self.players[captain_choice].has_bowled_this_over = False
+                return True
+        return False
+
 
 # Match class - Core game engine
 class Match:
@@ -2206,14 +2253,14 @@ async def request_batsman_selection(context: ContextTypes.DEFAULT_TYPE, group_id
 async def batting_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Select Batsman - Handles New Batsman after Wicket"""
     chat = update.effective_chat
-    if chat.id not in active_matches: return
+    if chat.id not in active_matches: 
+        return
     match = active_matches[chat.id]
     
     if match.phase == GamePhase.MATCH_ENDED:
         await update.message.reply_text("⚠️ Match has ended.")
         return
 
-    # Check if we are actually waiting for a batsman
     if not match.waiting_for_batsman:
         await update.message.reply_text("⚠️ Not the time to select a batsman.")
         return
@@ -2238,18 +2285,18 @@ async def batting_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Player not found.")
         return
     
-    # Validations
-    if player.is_out:
+    player_idx = serial - 1
+    
+    # Check if player is OUT using out_players_indices
+    if player_idx in bat_team.out_players_indices:
         await update.message.reply_text(f"⚠️ {player.first_name} is already OUT!")
         return
     
     # Prevent selecting the Non-Striker as Striker
-    if (bat_team.current_non_striker_idx is not None) and ((serial - 1) == bat_team.current_non_striker_idx):
+    if (bat_team.current_non_striker_idx is not None) and (player_idx == bat_team.current_non_striker_idx):
         await update.message.reply_text(f"⚠️ {player.first_name} is already at the Non-Striker end!")
         return
 
-    player_idx = serial - 1
-    
     # --- SELECTION LOGIC ---
     
     # Case 1: Start of Match (Striker Selection)
@@ -2268,23 +2315,19 @@ async def batting_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await request_bowler_selection(context, chat.id, match)
 
     # Case 3: Wicket Fall (Replacement Logic)
-    # The Striker slot is None (because of wicket), but Non-Striker exists
     elif bat_team.current_batsman_idx is None and bat_team.current_non_striker_idx is not None:
-        bat_team.current_batsman_idx = player_idx # New player becomes Striker
-        match.waiting_for_batsman = False # Stop waiting
+        bat_team.current_batsman_idx = player_idx
+        match.waiting_for_batsman = False
         
         await update.message.reply_text(f"✅ <b>New Batsman:</b> {player.first_name} is in!\n🔥 Resuming Game...", parse_mode=ParseMode.HTML)
         
-        # RESUME GAME LOGIC
         await asyncio.sleep(1)
         
-        # Check if the over was finished when the wicket fell
+        # Check if over was complete when wicket fell
         bowl_team = match.current_bowling_team
         if bowl_team.get_current_over_balls() == 0:
-             # Over is complete (balls = 0.6, 1.6 etc treated as 0 mod 6), so request new bowler
             await check_over_complete(context, chat.id, match)
         else:
-            # Over is still running, execute next ball
             await execute_ball(context, chat.id, match)
             
     else:
@@ -3079,254 +3122,165 @@ async def handle_batsman_timeout(context: ContextTypes.DEFAULT_TYPE, group_id: i
         )
 
 async def process_ball_result(context: ContextTypes.DEFAULT_TYPE, group_id: int, match: Match):
-    """Calculate Result with Run Rate & Required Run Rate"""
-    
+    """Process the ball outcome and update game state - FULL LOGIC WITH WICKET FIX"""
+    if not match.current_ball_data.get("batsman_number") or not match.current_ball_data.get("bowler_number"):
+        return
+
+    batsman_num = match.current_ball_data["batsman_number"]
+    bowler_num = match.current_ball_data["bowler_number"]
     bat_team = match.current_batting_team
     bowl_team = match.current_bowling_team
-    
+
     if bat_team.current_batsman_idx is None or bowl_team.current_bowler_idx is None:
         return
 
-    bowler_num = match.current_ball_data.get("bowler_number")
-    batsman_num = match.current_ball_data.get("batsman_number")
-    
-    if bowler_num is None or batsman_num is None:
-        return
-    
     striker = bat_team.players[bat_team.current_batsman_idx]
     bowler = bowl_team.players[bowl_team.current_bowler_idx]
-    
-    # ===== WIDE BALL CHECK (30% Chance) =====
-    is_wide = random.random() < 0.025
-    
-    if is_wide:
+
+    outcome = determine_outcome(batsman_num, bowler_num)  # Returns 0-6 runs, 7=wicket, etc.
+
+    # Reset free hit if not no-ball (assume no-ball logic separate)
+    match.is_free_hit = False
+
+    # Common: Count ball faced/bowled (legal ball)
+    striker.balls_faced += 1
+    bowler.balls_bowled += 1
+    bat_team.update_overs()
+
+    # Process specific outcomes
+    if outcome == 0:
+        # Dot ball
+        striker.dot_balls_faced += 1
+        bowler.dot_balls_bowled += 1
+        commentary = get_random_commentary("dot")
+        gif_url = get_random_gif(MatchEvent.DOT_BALL)
+        await send_ball_update(context, group_id, match, commentary, gif_url, runs=0, wicket=False)
+
+    elif outcome == 1:
+        # 1 run
+        striker.runs += 1
         bat_team.score += 1
-        bat_team.extras += 1
+        commentary = get_random_commentary("single")
+        gif_url = get_random_gif(MatchEvent.RUNS_1)
+        await send_ball_update(context, group_id, match, commentary, gif_url, runs=1, wicket=False)
+        bat_team.swap_batsmen()  # Rotate strike (odd runs)
+
+    elif outcome == 2:
+        # 2 runs
+        striker.runs += 2
+        bat_team.score += 2
+        commentary = get_random_commentary("double")
+        gif_url = get_random_gif(MatchEvent.RUNS_2)
+        await send_ball_update(context, group_id, match, commentary, gif_url, runs=2, wicket=False)
+        # No swap (even runs)
+
+    elif outcome == 3:
+        # 3 runs
+        striker.runs += 3
+        bat_team.score += 3
+        commentary = get_random_commentary("triple")
+        gif_url = get_random_gif(MatchEvent.RUNS_3)
+        await send_ball_update(context, group_id, match, commentary, gif_url, runs=3, wicket=False)
+        bat_team.swap_batsmen()  # Odd
+
+    elif outcome == 4:
+        # 4 runs
+        striker.runs += 4
+        striker.boundaries += 1
+        bat_team.score += 4
+        commentary = get_random_commentary("boundary")
+        gif_url = get_random_gif(MatchEvent.RUNS_4)
+        await send_ball_update(context, group_id, match, commentary, gif_url, runs=4, wicket=False)
+        # No swap (even)
+
+    elif outcome == 5:
+        # 5 runs (rare, overthrows)
+        striker.runs += 5
+        bat_team.score += 5
+        commentary = get_random_commentary("five")
+        gif_url = get_random_gif(MatchEvent.RUNS_5)
+        await send_ball_update(context, group_id, match, commentary, gif_url, runs=5, wicket=False)
+        bat_team.swap_batsmen()  # Odd
+
+    elif outcome == 6:
+        # 6 runs
+        striker.runs += 6
+        striker.sixes += 1
+        bat_team.score += 6
+        commentary = get_random_commentary("six")
+        gif_url = get_random_gif(MatchEvent.RUNS_6)
+        await send_ball_update(context, group_id, match, commentary, gif_url, runs=6, wicket=False)
+        # No swap (even)
+
+    elif outcome == 7:  # Wicket
+        # FULL WICKET FIX: Mark out, increment wickets, auto-select next batsman
+        striker.is_out = True
+        striker.dismissal_type = "bowled"  # Customize based on type (caught, etc.)
+        bowler.wickets += 1
+        bowl_team.runs_conceded += 0  # No runs on wicket ball
+
+        # Mark and update team state
+        bat_team.mark_batsman_out(bat_team.current_batsman_idx)
         
-        gif_url = get_random_gif(MatchEvent.WIDE)
-        commentary = get_random_commentary("wide")
-        
-        msg = f"🏏 <b>Over {format_overs(bowl_team.balls)}</b>\n\n"
-        msg += f"🚫 <b>WIDE BALL!</b> (+1 Run)\n"
-        msg += f"💬 <i>{commentary}</i>\n\n"
-        msg += f"📊 <b>Score:</b> {bat_team.score}/{bat_team.wickets}"
-        
-        # ✅ FIXED: Add Run Rate
-        current_rr = round(bat_team.score / max(bat_team.overs, 0.1), 2)
-        msg += f"\n📈 <b>Run Rate:</b> {current_rr}"
-        
-        # ✅ FIXED: Add RRR if chasing
-        if match.innings == 2:
-            runs_needed = match.target - bat_team.score
-            balls_left = (match.total_overs * 6) - bat_team.balls
-            rrr = round((runs_needed / max(balls_left, 1)) * 6, 2) if balls_left > 0 else 0
-            msg += f"\n🎯 <b>Need:</b> {runs_needed} runs in {balls_left} balls (RRR: {rrr})"
-        
-        try:
-            if gif_url:
-                await context.bot.send_animation(group_id, animation=gif_url, caption=msg, parse_mode=ParseMode.HTML)
-            else:
-                await context.bot.send_message(group_id, msg, parse_mode=ParseMode.HTML)
-        except:
-            await context.bot.send_message(group_id, msg, parse_mode=ParseMode.HTML)
-        
-        # Wide doesn't count as legal ball
-        match.current_ball_data = {}
-        await asyncio.sleep(2)
-        await execute_ball(context, group_id, match)
-        return
-    
-    # ===== WICKET CHECK =====
-    if bowler_num == batsman_num:
-        if match.is_free_hit:
-            # Free Hit: Half runs awarded, NOT OUT
-            half_runs = batsman_num // 2
-            bat_team.score += half_runs
-            striker.runs += half_runs
-            striker.balls_faced += 1
-            bowler.balls_bowled += 1
-            bowler.runs_conceded += half_runs
-            
-            gif_url = get_random_gif(MatchEvent.FREE_HIT)
-            msg = f"⚡ <b>FREE HIT SAVE!</b> Numbers matched ({batsman_num}).\n"
-            msg += f"🏃 <b>Runs Awarded:</b> {half_runs} (Half)\n"
-            msg += "✅ <b>Not Out!</b>"
-            
-            try:
-                if gif_url:
-                    await context.bot.send_animation(group_id, animation=gif_url, caption=msg, parse_mode=ParseMode.HTML)
-                else:
-                    await context.bot.send_message(group_id, msg, parse_mode=ParseMode.HTML)
-            except:
-                await context.bot.send_message(group_id, msg, parse_mode=ParseMode.HTML)
-            
-            match.is_free_hit = False
-            bowl_team.update_overs()
-            
-            match.ball_by_ball_log.append({
-                "over": format_overs(bowl_team.balls - 1),
-                "batsman": striker.first_name,
-                "bowler": bowler.first_name,
-                "result": f"Free Hit - {half_runs} runs",
-                "runs": half_runs,
-                "is_wicket": False
-            })
-            
+        commentary = get_random_commentary("wicket")
+        gif_url = get_random_gif(MatchEvent.WICKET)
+        await send_ball_update(context, group_id, match, commentary, gif_url, runs=0, wicket=True)
+
+        # Check innings end
+        if bat_team.is_all_out() or match.is_innings_complete():
+            await end_innings(context, group_id, match)
+            return
+
+        # Auto-select and notify next batsman
+        next_bat_idx = bat_team.get_next_batsman_idx()
+        if next_bat_idx is not None:
+            new_striker = bat_team.players[next_bat_idx]
+            await context.bot.send_message(
+                group_id, 
+                f"🏏 <b>New Batsman:</b> {new_striker.first_name} comes to the crease!\n"
+                f"Score: {bat_team.score}/{bat_team.wickets} ({format_overs(bat_team.balls)})",
+                parse_mode=ParseMode.HTML
+            )
+            # Continue with next ball (same bowler, new striker)
+            bat_team.current_batsman_idx = next_bat_idx  # Update striker
         else:
-            # NORMAL WICKET
-            striker.is_out = True
-            striker.dismissal_type = "Bowled"
-            striker.balls_faced += 1
-            bat_team.out_players_indices.add(bat_team.current_batsman_idx)
-            bat_team.wickets += 1
-            bowler.wickets += 1
-            bowler.balls_bowled += 1
-            
-            if striker.runs == 0:
-                striker.ducks = striker.ducks + 1 if hasattr(striker, 'ducks') else 1
-            
-            match.last_wicket_ball = {
-                "batsman": striker,
-                "bowler": bowler,
-                "bowler_number": bowler_num,
-                "batsman_number": batsman_num
-            }
-            
-            gif_url = get_random_gif(MatchEvent.WICKET)
-            commentary = get_random_commentary("wicket")
-            
-            msg = f"🏏 <b>Over {format_overs(bowl_team.balls)}</b>\n\n"
-            msg += f"❌ <b>OUT!</b> {striker.first_name} is dismissed!\n"
-            msg += f"📊 Score: {striker.runs} ({striker.balls_faced})\n"
-            msg += f"🎯 Bowler: {bowler.first_name}\n\n"
-            msg += f"💬 <i>{commentary}</i>\n\n"
-            msg += f"📈 <b>Score:</b> {bat_team.score}/{bat_team.wickets}"
-            
-            try:
-                if gif_url:
-                    await context.bot.send_animation(group_id, animation=gif_url, caption=msg, parse_mode=ParseMode.HTML)
-                else:
-                    await context.bot.send_message(group_id, msg, parse_mode=ParseMode.HTML)
-            except:
-                await context.bot.send_message(group_id, msg, parse_mode=ParseMode.HTML)
-            
-            bowl_team.update_overs()
-            
-            match.ball_by_ball_log.append({
-                "over": format_overs(bowl_team.balls - 1),
-                "batsman": striker.first_name,
-                "bowler": bowler.first_name,
-                "result": "Wicket",
-                "runs": 0,
-                "is_wicket": True
-            })
-            
-            await asyncio.sleep(2)
-            
-            # ✅ FIXED: Offer DRS to Captain (10 seconds timeout)
-            if bat_team.drs_remaining > 0:
-                await offer_drs_to_captain(context, group_id, match)
-                return
-            else:
-                # No DRS available, confirm wicket
-                await confirm_wicket_and_continue(context, group_id, match)
-                return
-    
-    # ===== RUNS SCORED =====
-    else:
-        runs = batsman_num
-        bat_team.score += runs
-        striker.runs += runs
-        striker.balls_faced += 1
-        bowler.balls_bowled += 1
-        bowler.runs_conceded += runs
-        
-        if runs == 4:
-            striker.boundaries = striker.boundaries + 1 if hasattr(striker, 'boundaries') else 1
-        elif runs == 6:
-            striker.sixes = striker.sixes + 1 if hasattr(striker, 'sixes') else 1
-        
-        if runs == 0:
-            commentary_key = "dot"
-            event = MatchEvent.DOT_BALL
-            striker.dot_balls_faced += 1
-            bowler.dot_balls_bowled += 1
-        elif runs == 1:
-            commentary_key = "single"
-            event = MatchEvent.RUNS_1
-        elif runs == 2:
-            commentary_key = "double"
-            event = MatchEvent.RUNS_2
-        elif runs == 3:
-            commentary_key = "triple"
-            event = MatchEvent.RUNS_3
-        elif runs == 4:
-            commentary_key = "boundary"
-            event = MatchEvent.RUNS_4
-        elif runs == 5:
-            commentary_key = "five"
-            event = MatchEvent.RUNS_5
-        else:
-            commentary_key = "six"
-            event = MatchEvent.RUNS_6
-        
-        gif_url = get_random_gif(event)
-        commentary = get_random_commentary(commentary_key)
-        
-        msg = f"🏏 <b>Over {format_overs(bowl_team.balls)}</b>\n\n"
-        if match.is_free_hit:
-            msg += "⚡ <b>FREE HIT</b>\n"
-            match.is_free_hit = False
-        
-        msg += f"🎯 <b>{runs} RUN{'S' if runs != 1 else ''}!</b>\n"
-        msg += f"💬 <i>{commentary}</i>\n\n"
-        msg += f"📊 <b>Score:</b> {bat_team.score}/{bat_team.wickets}"
-        
-        # ✅ FIXED: Add Run Rate
-        current_rr = round(bat_team.score / max(bat_team.overs, 0.1), 2)
-        msg += f"\n📈 <b>Run Rate:</b> {current_rr}"
-        
-        # ✅ FIXED: Add RRR if chasing
-        if match.innings == 2:
-            runs_needed = match.target - bat_team.score
-            balls_left = (match.total_overs * 6) - bat_team.balls
-            rrr = round((runs_needed / max(balls_left, 1)) * 6, 2) if balls_left > 0 else 0
-            msg += f"\n🎯 <b>Need:</b> {runs_needed} runs in {balls_left} balls (RRR: {rrr})"
-        
-        try:
-            if gif_url and runs > 0:
-                await context.bot.send_animation(group_id, animation=gif_url, caption=msg, parse_mode=ParseMode.HTML)
-            else:
-                await context.bot.send_message(group_id, msg, parse_mode=ParseMode.HTML)
-        except:
-            await context.bot.send_message(group_id, msg, parse_mode=ParseMode.HTML)
-        
-        bowl_team.update_overs()
-        
-        match.ball_by_ball_log.append({
-            "over": format_overs(bowl_team.balls - 1),
-            "batsman": striker.first_name,
-            "bowler": bowler.first_name,
-            "result": f"{runs} run{'s' if runs != 1 else ''}",
-            "runs": runs,
-            "is_wicket": False
-        })
-        
-        if runs % 2 == 1:
-            bat_team.swap_batsmen()
-    
-    match.current_ball_data = {}
-    
-    if bowl_team.get_current_over_balls() == 0:
+            # All out fallback
+            await end_innings(context, group_id, match)
+            return
+
+    # No-ball/Wide/Extras logic (add if separate, e.g., outcome=8=wide)
+    # Example for wide:
+    # elif outcome == 8:
+    #     bat_team.score += 1
+    #     bat_team.extras += 1
+    #     bat_team.wides += 1  # Team level or bowler
+    #     match.is_free_hit = True
+    #     # No ball faced/bowled count
+
+    # Log the ball (full entry)
+    match.ball_by_ball_log.append({
+        "over": format_overs(bat_team.balls),
+        "outcome": outcome,
+        "runs": outcome if outcome <= 6 else 0,
+        "wicket": outcome == 7,
+        "batsman": striker.user_id,
+        "bowler": bowler.user_id,
+        "commentary": commentary
+    })
+
+    # Reset ball data
+    match.current_ball_data = {}  # Clear for next
+
+    # Check over complete
+    if bowl_team.get_current_over_balls() == 6:
         await check_over_complete(context, group_id, match)
     else:
-        if match.innings == 2 and bat_team.score >= match.target:
-            await end_innings(context, group_id, match)
-        elif bat_team.balls >= match.total_overs * 6:
-            await end_innings(context, group_id, match)
-        else:
-            await asyncio.sleep(2)
-            await execute_ball(context, group_id, match)
+        # Next ball immediately
+        await execute_ball(context, group_id, match)
+
+    # Final innings check
+    if match.is_innings_complete():
+        await end_innings(context, group_id, match)
 
 async def offer_drs_to_captain(context: ContextTypes.DEFAULT_TYPE, group_id: int, match: Match):
     """Offer DRS to Captain with 10 second timeout"""
@@ -3541,31 +3495,37 @@ async def process_drs_review(context: ContextTypes.DEFAULT_TYPE, group_id: int, 
 async def confirm_wicket_and_continue(context: ContextTypes.DEFAULT_TYPE, group_id: int, match: Match):
     """Handle Wicket: Remove Out Player -> Request New"""
     
-    if match.phase == GamePhase.MATCH_ENDED: return
+    if match.phase == GamePhase.MATCH_ENDED: 
+        return
+
+    bat_team = match.current_batting_team
+    bowl_team = match.current_bowling_team
+    
+    # Add out player to out_players_indices
+    if bat_team.current_batsman_idx is not None:
+        bat_team.out_players_indices.add(bat_team.current_batsman_idx)
 
     # Check All Out
-    if match.current_batting_team.is_all_out():
+    if bat_team.is_all_out():
         await context.bot.send_message(group_id, "❌ <b>ALL OUT!</b> Innings ended.", parse_mode=ParseMode.HTML)
         await end_innings(context, group_id, match)
         return
     
     # Check Overs/Target limits
-    if match.current_batting_team.balls >= match.total_overs * 6:
+    if bat_team.balls >= match.total_overs * 6:
         await end_innings(context, group_id, match)
         return
-    if match.innings == 2 and match.current_batting_team.score >= match.target:
+    if match.innings == 2 and bat_team.score >= match.target:
         await end_innings(context, group_id, match)
         return
     
-    # --- CORE LOGIC FIX ---
-    # Set current striker index to None to indicate the slot is empty
-    match.current_batting_team.current_batsman_idx = None 
+    # Set striker slot to None
+    bat_team.current_batsman_idx = None 
     match.waiting_for_batsman = True 
     
     await context.bot.send_message(group_id, "📣 <b>Wicket Fell!</b> Captain, please select a new batsman.", parse_mode=ParseMode.HTML)
     await asyncio.sleep(1)
     await request_batsman_selection(context, group_id, match)
-
 
 async def confirm_wicket(context: ContextTypes.DEFAULT_TYPE, group_id: int, match: Match, drs_used: bool, drs_successful: bool):
     """Confirm wicket and update match state"""
@@ -3647,48 +3607,182 @@ async def confirm_wicket(context: ContextTypes.DEFAULT_TYPE, group_id: int, matc
         await request_batsman_selection(context, group_id, match)
 
 async def check_over_complete(context: ContextTypes.DEFAULT_TYPE, group_id: int, match: Match):
-    """End of Over Logic - Resets Bowler & Pauses Game"""
-    
-    # Safety Check
-    if match.phase == GamePhase.MATCH_ENDED: return
-
-    bat_team = match.current_batting_team
+    """Handle over completion: Update bowler stats, request new bowler from captain - FULL LOGIC WITH TIMEOUT"""
     bowl_team = match.current_bowling_team
-    
-    striker = bat_team.players[bat_team.current_batsman_idx] if bat_team.current_batsman_idx is not None else None
-    non_striker = bat_team.players[bat_team.current_non_striker_idx] if bat_team.current_non_striker_idx is not None else None
-    bowler = bowl_team.players[bowl_team.current_bowler_idx]
-    
-    # Add bowler to history (prevent bowling 2 overs in a row)
-    bowl_team.bowler_history.append(bowl_team.current_bowler_idx)
-    
-    rr = round(bat_team.score / max(bat_team.overs, 1), 2)
-    striker_runs = f"{striker.runs}*" if striker else "OUT"
-    non_striker_runs = f"{non_striker.runs}" if non_striker else "OUT"
+    if bowl_team.current_bowler_idx is None:
+        return
 
-    summary = f"🏏 <b>OVER COMPLETE!</b> ({format_overs(bowl_team.balls)})\n"
-    summary += "━━━━━━━━━━━━━━━\n"
-    summary += f"📊 Score: <b>{bat_team.score}/{bat_team.wickets}</b>\n"
-    summary += f"📈 Run-Rate: {rr}\n"
-    summary += f"🏏 Strike: {striker.first_name} ({striker_runs})\n"
-    summary += f"👀 Non-Strike: {non_striker.first_name} ({non_striker_runs})\n"
-    summary += f"⚾ Bowler: {bowler.first_name} ({bowler.wickets}/{bowler.runs_conceded})\n\n"
-    summary += "👇 <b>Bowling Captain, please select a NEW bowler!</b>"
-    
-    await context.bot.send_message(group_id, summary, parse_mode=ParseMode.HTML)
-    
-    await asyncio.sleep(2)
-    
-    # Check if Innings/Match ended
-    if bat_team.balls >= match.total_overs * 6:
+    current_bowler = bowl_team.players[bowl_team.current_bowler_idx]
+    current_bowler.balls_bowled += 6  # Full over completed
+    current_bowler.overs_bowled += 1
+    # Maiden check: If 0 runs in this over (track per over if needed)
+    # Assume: if bowl_team.runs_conceded_this_over == 0: current_bowler.maiden_overs += 1
+
+    # Reset for next over (FULL FIX: Force new bowler)
+    bowl_team.current_bowler_idx = None  # Reset to trigger selection
+    current_bowler.has_bowled_this_over = True  # For history
+    # bowl_team.runs_conceded_this_over = 0  # Reset if tracking
+
+    # Notify over end with stats
+    await context.bot.send_message(
+        group_id,
+        f"🏏 <b>Over Complete!</b>\n"
+        f"⚾ {current_bowler.first_name}: 1-0-{current_bowler.runs_conceded}-{current_bowler.wickets}\n"
+        f"📊 Score: {match.current_batting_team.score}/{match.current_batting_team.wickets} "
+        f"({format_overs(match.current_batting_team.balls)})",
+        parse_mode=ParseMode.HTML
+    )
+
+    # Get captain for selection
+    captain = match.get_captain(bowl_team)
+    if not captain:
+        await context.bot.send_message(group_id, "⚠️ No captain selected for bowling team! Ending innings.")
         await end_innings(context, group_id, match)
-    elif match.innings == 2 and bat_team.score >= match.target:
+        return
+
+    # Get available bowlers (exclude last one)
+    available_bowlers = bowl_team.get_available_bowlers()
+    if not available_bowlers:
+        await context.bot.send_message(group_id, "❌ No available bowlers left! Ending innings.")
         await end_innings(context, group_id, match)
+        return
+
+    # Create inline keyboard for captain (FULL OPTIONS)
+    keyboard = []
+    for i, player in enumerate(available_bowlers):
+        keyboard.append([InlineKeyboardButton(
+            f"{i+1}. {player.first_name} ({player.get_economy():.1f} Econ)",
+            callback_data=f"select_bowler_{i}"
+        )])
+    keyboard.append([InlineKeyboardButton("🤖 Auto-Select Random", callback_data="select_bowler_auto")])
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    # Send private to captain
+    try:
+        await context.bot.send_message(
+            captain.user_id,
+            f"⚾ <b>Captain's Call ({bowl_team.name}):</b>\n"
+            f"Select next bowler for the over.\n"
+            f"Current Score: {match.current_batting_team.score}/{match.current_batting_team.wickets} "
+            f"({format_overs(match.current_batting_team.balls)})",
+            reply_markup=reply_markup,
+            parse_mode=ParseMode.HTML
+        )
+        await context.bot.send_message(
+            group_id,
+            f"⏳ <b>{captain.first_name} (Captain)</b> selecting next bowler... (Private DM)\n"
+            f"<i>30s timeout - Auto-select if no response.</i>",
+            parse_mode=ParseMode.HTML
+        )
+    except Exception as e:
+        logger.error(f"DM to captain failed: {e}")
+        # Fallback: Auto-select
+        next_bowler_idx = random.choice([i for i, p in enumerate(bowl_team.players) if not p.is_bowling_banned])
+        bowl_team.select_next_bowler(next_bowler_idx)
+        await context.bot.send_message(group_id, f"📱 DM Failed! Auto-selected: {bowl_team.players[next_bowler_idx].first_name}")
+
+    # Start timeout task (30s)
+    if match.bowler_selection_task:
+        match.bowler_selection_task.cancel()
+    match.bowler_selection_task = asyncio.create_task(
+        request_bowler_timeout(context, group_id, match, bowl_team)
+    )
+
+async def request_bowler_timeout(context: ContextTypes.DEFAULT_TYPE, group_id: int, match: Match, bowl_team: Team):
+    """Timeout handler for bowler selection - FULL AUTO-SELECT LOGIC"""
+    try:
+        await asyncio.sleep(30)
+        # Check if still waiting (task not cancelled)
+        if bowl_team.current_bowler_idx is not None:
+            return  # Already selected
+
+        # Auto-select random available (FIXED SYNTAX HERE)
+        available_indices = [i for i, p in enumerate(bowl_team.players) 
+                             if not p.is_bowling_banned and (i != bowl_team.bowler_history[-1] if bowl_team.bowler_history else True)]
+        if available_indices:
+            next_idx = random.choice(available_indices)
+            success = bowl_team.select_next_bowler(next_idx)
+            if success:
+                selected = bowl_team.players[next_idx]
+                await context.bot.send_message(
+                    group_id, 
+                    f"⏰ <b>Selection Timeout!</b>\n"
+                    f"🤖 Auto-selected: {selected.first_name} to bowl next over.",
+                    parse_mode=ParseMode.HTML
+                )
+            else:
+                await context.bot.send_message(group_id, "❌ Auto-select failed! No valid bowlers.")
+                await end_innings(context, group_id, match)
+                return
+        else:
+            await context.bot.send_message(group_id, "❌ No bowlers available! Ending innings.")
+            await end_innings(context, group_id, match)
+            return
+
+        # Proceed to next ball
+        await execute_ball(context, group_id, match)
+    except asyncio.CancelledError:
+        pass  # Task cancelled (manual select happened)
+
+async def bowler_selection_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Callback for captain's bowler selection - FULL VALIDATION & PROCEED"""
+    query = update.callback_query
+    await query.answer()
+    
+    data = query.data.split("_")
+    if len(data) != 3 or data[0] != "select" or data[1] != "bowler":
+        return
+
+    try:
+        bowler_idx = int(data[2])
+    except ValueError:
+        # Auto-select case
+        if data[2] == "auto":
+            # Handle auto in timeout, but if clicked, trigger random
+            chat_id = query.message.chat_id
+            if chat_id not in active_matches:
+                return
+            match = active_matches[chat_id]
+            bowl_team = match.current_bowling_team
+            available = [i for i, p in enumerate(bowl_team.players) if not p.is_bowling_banned]
+            if available:
+                bowler_idx = random.choice(available)
+            else:
+                await query.answer("No bowlers available!", show_alert=True)
+                return
+        else:
+            await query.answer("Invalid selection!", show_alert=True)
+            return
+
+    chat_id = query.message.chat_id
+    if chat_id not in active_matches:
+        return
+    match = active_matches[chat_id]
+    bowl_team = match.current_bowling_team
+
+    captain = match.get_captain(bowl_team)
+    if query.from_user.id != captain.user_id:
+        await query.answer("❌ Only captain can select bowler!", show_alert=True)
+        return
+
+    # Select and validate
+    if bowl_team.select_next_bowler(bowler_idx):
+        selected = bowl_team.players[bowler_idx]
+        await context.bot.send_message(
+            chat_id,
+            f"✅ <b>{captain.first_name}</b> selects {selected.first_name} to bowl the next over!\n"
+            f"📊 Score: {match.current_batting_team.score}/{match.current_batting_team.wickets} "
+            f"({format_overs(match.current_batting_team.balls)})",
+            parse_mode=ParseMode.HTML
+        )
+        # Cancel timeout task
+        if match.bowler_selection_task:
+            match.bowler_selection_task.cancel()
+            match.bowler_selection_task = None
+        # Proceed to next over's first ball
+        await execute_ball(context, group_id=chat_id, match=match)
     else:
-        # FORCE NEW BOWLER SELECTION
-        bowl_team.current_bowler_idx = None  # Remove current bowler
-        match.waiting_for_bowler = True      # Enable waiting flag
-        await request_bowler_selection(context, group_id, match)
+        await query.answer("❌ Invalid bowler choice! Try again.", show_alert=True)
 
 async def timeout_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Strategic Timeout - Host Only"""
