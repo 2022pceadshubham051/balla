@@ -3117,8 +3117,8 @@ async def process_ball_result(context: ContextTypes.DEFAULT_TYPE, group_id: int,
     striker = bat_team.players[bat_team.current_batsman_idx]
     bowler = bowl_team.players[bowl_team.current_bowler_idx]
     
-    # ===== WIDE BALL CHECK (30% Chance) =====
-    is_wide = random.random() < 0.30
+    # ===== WIDE BALL CHECK (03% Chance) =====
+    is_wide = random.random() < 0.025
     
     if is_wide:
         bat_team.score += 1
@@ -5065,4 +5065,5 @@ def main():
     application.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == "__main__":
+
     main()
