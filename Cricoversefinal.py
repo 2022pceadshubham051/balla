@@ -97,51 +97,49 @@ class MatchEvent(Enum):
 # GIF URLs for match events
 GIFS = {
     MatchEvent.DOT_BALL: [
-        "https://t.me/kyanaamrkhe/31",
-        "https://t.me/kyanaamrkhe/32"
+        "CgACAgQAAyEFAATEuZi2AAIEsmlL3oS80G_hP2r73pB1Xp9fja2TAAJ2EwACARH5UrcBeu1Hx7x-NgQ"
     ],
     MatchEvent.RUNS_1: [
-        "https://t.me/kyanaamrkhe/28",
-        "https://t.me/kyanaamrkhe/26",
-        "https://t.me/kyanaamrkhe/30"
+        "CgACAgUAAyEFAATEuZi2AAIE_mlL51w3IW0jthJmfZeMqNVpFRfUAAIiLQACeNjhVxT4d9Xn2PI-NgQ",
+        "CgACAgUAAyEFAATU3pgLAAIKkWlE9Gqtq1mAjiu926NvWRGfxQW1AAIJHAACOMrpVwhrNvXoibUAATYE",
+        "CgACAgUAAyEFAATEuZi2AAIFYmlL7mOnFTT69LGMLS9G2oA6EHJpAAJsHQACRV1hVnaw6OSdIDwQNgQ"
     ],
     MatchEvent.RUNS_2: [
-        "https://t.me/kyanaamrkhe/24",
-        "https://t.me/kyanaamrkhe/25",
-        "https://t.me/kyanaamrkhe/29"
+        "CgACAgUAAyEFAATEuZi2AAIFK2lL6X8FPyJRYp9RbF6DiAAB-RqzvAACWR0AAkVdYVY9UqOGM0nDajYE",
+        "CgACAgUAAyEFAATU3pgLAAIKi2lE9GrIvY93_Dcaiv8zaa0IbES6AALJGgACN2_pV4f4uWRTw9wxNgQ"
     ],
     MatchEvent.RUNS_3: [
-        "https://t.me/kyanaamrkhe/23"
+        "CgACAgUAAyEFAATEuZi2AAIFQGlL64CXO07OHbHMip1g2Lu0HFayAAJlHQACRV1hVkXx8RdRbQniNgQ",
+        "CgACAgUAAyEFAATU3pgLAAIKf2lE9Gq72p6bgh1C8K9SjTyciqXfAAI2DwACPzbQVnca7Od2bSquNgQ"
     ],
     MatchEvent.RUNS_4: [
-        "https://t.me/kyanaamrkhe/17",
-        "https://t.me/kyanaamrkhe/18",
-        "https://t.me/kyanaamrkhe/19",
-        "https://t.me/kyanaamrkhe/20",
-        "https://t.me/kyanaamrkhe/21",
-        "https://t.me/kyanaamrkhe/22"
+        "CgACAgUAAyEGAATYx4tPAAJIvmlMBASE6vZ-FK1_CKrtrHRpUi5WAAJSCAACD_YgVo49O55ICLAENgQ",
+        "CgACAgUAAxkBAAIKY2lNWXZwCPa1mikPTuiI-im6KsXZAALbCgAC5WCoVXTWQ_MhLqz4NgQ",
+        "CgACAgUAAyEGAATYx4tPAAJKRGlM-l-WWxsOUMrQJWlDsnrShZALAAKtDAACFqM4VMeSD_FLQu8MNgQ",
+        "CgACAgUAAyEGAAShX2HTAAIgpWlMOtRIxiwO5A91S3qnzJ3hNJpFAAJTBgACmdE5V_Z3vM_sBDZCNgQ",
+        "CgACAgUAAyEFAATYx4tPAAJDtWlLmks4fC6UZFYmqqV_i-B8_jC1AAJcFwACITAQVA4cFTAQ7BfKNgQ"
     ],
     MatchEvent.RUNS_5: [
-        "https://t.me/kyanaamrkhe/15",
-        "https://t.me/kyanaamrkhe/16",
-        "https://t.me/kyanaamrkhe/39"
+        "CgACAgQAAyEFAATU3pgLAAIKiGlE9GoYG_0qTVEd3Le7R6qvyWrWAAJeGwACryS5UH5WGCXTJywAATYE",
+        "CgACAgQAAyEFAATEuZi2AAIE6mlL4TanjQPWyDaNCpaXtOq-CVtOAAJ_IAACMudhUlC2yWKM8GmFNgQ",
+        "CgACAgUAAyEFAATEuZi2AAIFTWlL7Eq7OGaFKKEfosOF_jAtHWTUAALmHAAChf5gVivH4SvOeCpRNgQ"
     ],
     MatchEvent.RUNS_6: [
-        "https://t.me/kyanaamrkhe/8",
-        "https://t.me/kyanaamrkhe/9",
-        "https://t.me/kyanaamrkhe/10",
-        "https://t.me/kyanaamrkhe/11",
-        "https://t.me/kyanaamrkhe/12",
-        "https://t.me/kyanaamrkhe/13",
-        "https://t.me/kyanaamrkhe/14"
+        "CgACAgUAAyEGAAShX2HTAAIhH2lMRrNUrjRV4GW2K8booBvMtTG9AAKrCgACJXRpVOeF4ynzTcBoNgQ",
+        "CgACAgUAAyEGAATYx4tPAAJItmlMA-mbxLqNhGcc8S785y2j5BWEAAKzDQAC9WdJVnVvz6iMeR39NgQ",
+        "CgACAgUAAyEGAATYx4tPAAJHmWlL_f9GFzB3wlmreOcoJdNeQb5pAAJpAwAClZdBVj1oWzydv8lMNgQ",
+        "CgACAgQAAyEFAATEuZi2AAIE6GlL4QXc1nMUBKOdGkLrPuPPYfUPAAJ-IAACMudhUqLnowABXPhb3DYE",
+        "CgACAgUAAyEFAATU3pgLAAIKjmlE9GrcsVDgJe8ohHimK7JQf-MeAAJdFwACITAQVNF-Nok7Tly0NgQ",
+        "CgACAgUAAyEFAATYx4tPAAJDw2lLmkzfNB56Io-uMPnGQmOTuU3wAAKJAwAC0ymZV0m1AAEE0NAEjTYE",
+        "CgACAgUAAyEFAATU3pgLAAIKfGlE9GqHxSIInO0P4wSVuD5xbNiNAAJgGQACzouoVeTU9nOOeNqDNgQ"
     ],
     MatchEvent.WICKET: [
-        "https://t.me/kyanaamrkhe/33",
-        "https://t.me/kyanaamrkhe/34",
-        "https://t.me/kyanaamrkhe/35",
-        "https://t.me/kyanaamrkhe/36",
-        "https://t.me/kyanaamrkhe/37",
-        "https://t.me/kyanaamrkhe/38"
+        "CgACAgQAAyEFAATU3pgLAAIKhGlE9Go2nsCXKpBBjglIQ2I3ZObsAAKvFQACaewBUkT0IZS8qdW4NgQ",
+        "CgACAgQAAyEFAATU3pgLAAIKhWlE9GpEJp5SCDH35xUN97QPkkdSAAK1EwACMv1pUfLrRWYa9zWLNgQ",
+        "CgACAgUAAyEFAATU3pgLAAIKhmlE9GoVK8ybgnUTS502q1YMSG35AALqAwACIHhpV7c1o-HTQNSPNgQ",
+        "CgACAgQAAyEFAATU3pgLAAIKjWlE9GqL7Uad2y2fznl2ZvasOk_xAALaGQACh1UBUdFsFVeRv5qwNgQ",
+        "CgACAgUAAyEGAATYx4tPAAJHa2lL_VmXp7nhZMuNPVRgbDmv54uXAAKQCAACBRCRVj5VjvOl6j21NgQ",
+        "CgACAgUAAyEGAAShX2HTAAIh3WlM785mkSB-K9myKNbS1lfWmB6fAAKRBgAC_DYZVhtRUsAAAW_fvzYE"
     ],
     MatchEvent.NO_BALL: [
         "https://tenor.com/bBvYA.gif"
@@ -6489,16 +6487,6 @@ async def handle_group_input(update: Update, context: ContextTypes.DEFAULT_TYPE)
                         if match.ball_timeout_task: match.ball_timeout_task.cancel()
                         await process_ball_result(context, chat_id, match)
                         processed = True
-
-    # ==========================================
-    # 🧹 CLEANUP
-    # ==========================================
-    # Delete the number message to keep gameplay clean (Requires Admin)
-    if processed:
-        try:
-            await update.message.delete()
-        except: 
-            pass # Fail silently if bot has no delete permissions
 
 async def handle_dm_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle DM Input with Safety Check & GIF for Solo Mode"""
