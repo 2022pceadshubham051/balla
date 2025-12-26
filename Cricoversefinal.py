@@ -1428,90 +1428,150 @@ async def huddle_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text(msg, parse_mode=ParseMode.HTML)
 
-async def solo_game_timer(context, chat_id, match, player_type, player_name):
-    """Timer specifically for Solo Mode (45s)"""
-    try:
-        # Wait 30 seconds
-        await asyncio.sleep(30)
-        try:
-            await context.bot.send_message(
-                chat_id, 
-                f"⏳ <b>Hurry Up {player_name}!</b> 15 seconds left!", 
-                parse_mode=ParseMode.HTML
-            )
-        except: pass
-        
-        # Remaining 15 Seconds
-        await asyncio.sleep(15)
-        
-        # Timeout Trigger
-        await handle_solo_timeout(context, chat_id, match, player_type)
-            
-    except asyncio.CancelledError:
-        pass
-
-async def handle_solo_timeout(context, chat_id, match, player_type):
-    """Handle Penalties for Solo Mode Timeouts"""
+async def solo_game_timer(context, chat_id, match, role, player_name):
+    """Handles Timeouts: Bowler (-4/Ban) & Batsman (Dot/Auto-Out)"""
     
-    # --- BATSMAN TIMEOUT ---
-    if player_type == "batsman":
-        batter = match.solo_players[match.current_solo_bat_idx]
-        batter.batting_timeouts += 1
-        
-        # 3 Timeouts = AUTO OUT
-        if batter.batting_timeouts >= 3:
-            msg = f"🚫 <b>AUTO-OUT!</b> {batter.first_name} timed out 3 times.\n❌ <b>Result:</b> Wicket!"
-            await context.bot.send_message(chat_id, msg, parse_mode=ParseMode.HTML)
-            
-            # Simulate Wicket Logic
-            match.current_ball_data["batsman_number"] = match.current_ball_data["bowler_number"]
-            await process_solo_turn_result(context, chat_id, match)
-            return
+    # 20 Seconds Timer
+    await asyncio.sleep(20)
 
-        # < 3 Timeouts = -6 Penalty
-        else:
-            penalty = 6
-            batter.runs -= penalty
-            if batter.runs < 0: batter.runs = 0
-            
-            msg = f"⏰ <b>TIMEOUT WARNING!</b> ({batter.batting_timeouts}/3)\n"
-            msg += f"📉 <b>Penalty:</b> -6 Runs deducted!\n"
-            msg += f"📊 <b>Current Score:</b> {batter.runs}"
-            await context.bot.send_message(chat_id, msg, parse_mode=ParseMode.HTML)
-            
-            batter.balls_faced += 1
-            await rotate_solo_bowler(context, chat_id, match)
+    # Agar turn already ho gaya hai, to ignore karo
+    if match.current_ball_data.get(f"{role}_number") is not None:
+        return
 
-    # --- BOWLER TIMEOUT ---
-    elif player_type == "bowler":
+    # ==========================================
+    # 🎳 BOWLER TIMEOUT LOGIC (Previous Logic)
+    # ==========================================
+    if role == "bowler":
         bowler = match.solo_players[match.current_solo_bowl_idx]
-        batter = match.solo_players[match.current_solo_bat_idx]
-        bowler.bowling_timeouts += 1
+        if not hasattr(bowler, 'timeout_count'): bowler.timeout_count = 0
+        bowler.timeout_count += 1
         
-        # 3 Timeouts = BANNED
-        if bowler.bowling_timeouts >= 3:
+        # Penalty: -4 Runs
+        bowler.runs -= 4
+        
+        msg = "🔴 <b>LIVE (TIMEOUT)</b>\n"
+        msg += "━━━━━━━━━━━━━━━━━━━━━\n"
+        msg += f"👤 <b>{bowler.first_name}</b> didn't bowl!\n"
+        msg += f"⚠️ <b>Penalty:</b> -4 Runs deducted.\n"
+        msg += f"📉 <b>New Score:</b> {bowler.runs}\n"
+
+        # CASE 3: BAN (3rd Strike)
+        if bowler.timeout_count >= 3:
             bowler.is_bowling_banned = True
-            msg = f"🚫 <b>BANNED!</b> {bowler.first_name} timed out 3 times!\n"
-            msg += "⚠️ <b>They are removed from bowling rotation!</b>"
+            msg += "🚫 <b>BAN ACTIVATED!</b>\n"
+            msg += "You are removed from bowling for this match.\n"
+            msg += "━━━━━━━━━━━━━━━━━━━━━"
             await context.bot.send_message(chat_id, msg, parse_mode=ParseMode.HTML)
-            
-            await rotate_solo_bowler(context, chat_id, match, force_new_bowler=True)
+            await change_bowler_due_to_ban(context, chat_id, match)
             return
-            
-        # < 3 Timeouts = NO BALL + FREE HIT
+
+        # CASE 1 & 2: Warning & Auto-Bowl
         else:
-            batter.runs += 1
-            match.is_free_hit = True
-            
-            msg = f"⏰ <b>BOWLER TIMEOUT!</b> ({bowler.bowling_timeouts}/3)\n"
-            msg += "🚫 <b>Result:</b> NO BALL! (+1 Run)\n"
-            msg += "⚡ <b>Next ball is a FREE HIT!</b>\n"
-            msg += "🔄 <i>Bowler must bowl again!</i>"
+            msg += f"⚠️ <b>Warning Level:</b> {bowler.timeout_count}/3\n"
+            msg += "🤖 <b>Bot Auto-Bowl:</b> 0 (Pie Chucker)\n"
+            msg += "━━━━━━━━━━━━━━━━━━━━━"
             await context.bot.send_message(chat_id, msg, parse_mode=ParseMode.HTML)
             
-            match.ball_timeout_task = asyncio.create_task(
-                solo_game_timer(context, chat_id, match, "bowler", bowler.first_name)
-            )
+            # Auto-submit '0'
+            match.current_ball_data["bowler_number"] = 0
+            if match.current_ball_data["batsman_number"] is not None:
+                 await process_solo_turn_result(context, chat_id, match)
+            else:
+                 # Notify batsman to hit the auto-ball
+                 await context.bot.send_message(chat_id, f"⚾ <b>Ball Delivered (Auto)!</b>\nBatsman, hit the 0!", parse_mode=ParseMode.HTML)
+
+    # ==========================================
+    # 🏏 BATSMAN TIMEOUT LOGIC (New)
+    # ==========================================
+    elif role == "batsman":
+        batter = match.solo_players[match.current_solo_bat_idx]
+        bowler = match.solo_players[match.current_solo_bowl_idx]
+        
+        # Initialize Count
+        if not hasattr(batter, 'timeout_count'): batter.timeout_count = 0
+        batter.timeout_count += 1
+        
+        bat_tag = f"<a href='tg://user?id={batter.user_id}'>{batter.first_name}</a>"
+
+        # --- CASE 3: AUTO OUT ---
+        if batter.timeout_count >= 3:
+            batter.is_out = True
+            
+            msg = "🔴 <b>LIVE (TIMEOUT WICKET)</b>\n"
+            msg += "━━━━━━━━━━━━━━━━━━━━━\n"
+            msg += f"❌ <b>OUT! {bat_tag} is dismissed!</b>\n"
+            msg += "⚠️ <b>Reason:</b> 3 Timeouts (Too Slow)\n"
+            msg += f"📊 <b>Final Score:</b> {batter.runs} ({batter.balls_faced})\n"
+            msg += "━━━━━━━━━━━━━━━━━━━━━"
+            
+            await context.bot.send_message(chat_id, msg, parse_mode=ParseMode.HTML)
+            
+            # Move to Next Batsman
+            match.current_solo_bat_idx += 1
+            if match.current_solo_bat_idx >= len(match.solo_players):
+                await end_solo_game_logic(context, chat_id, match)
+                return
+            
+            # Next Batsman Setup
+            match.current_solo_bowl_idx = (match.current_solo_bat_idx + 1) % len(match.solo_players)
+            new_batter = match.solo_players[match.current_solo_bat_idx]
+            new_bat_tag = f"<a href='tg://user?id={new_batter.user_id}'>{new_batter.first_name}</a>"
+            
+            await asyncio.sleep(2)
+            await context.bot.send_message(chat_id, f"⚡ <b>NEXT BATSMAN:</b> {new_bat_tag} walks to the crease!", parse_mode=ParseMode.HTML)
+            
+            await asyncio.sleep(2)
+            await trigger_solo_ball(context, chat_id, match)
+
+        # --- CASE 1 & 2: WARNING + DOT BALL ---
+        else:
+            # Manually update stats for a Dot Ball
+            batter.balls_faced += 1
+            if not hasattr(bowler, 'runs_conceded'): bowler.runs_conceded = 0
+            if not hasattr(bowler, 'balls_bowled'): bowler.balls_bowled = 0
+            bowler.balls_bowled += 1
+            # Note: No runs added to batter or bowler
+            
+            msg = "🔴 <b>LIVE (TIMEOUT)</b>\n"
+            msg += "━━━━━━━━━━━━━━━━━━━━━\n"
+            msg += f"⚠️ <b>Warning {batter.timeout_count}/3 to {bat_tag}</b>\n"
+            msg += "💤 You slept on the pitch!\n"
+            msg += "⚪ <b>Result:</b> Dot Ball (0 Runs)\n"
+            msg += "━━━━━━━━━━━━━━━━━━━━━"
+            
+            await context.bot.send_message(chat_id, msg, parse_mode=ParseMode.HTML)
+            
+            # Handle Over Change / Next Ball Logic manually
+            match.solo_balls_this_spell += 1
+            
+            if match.solo_balls_this_spell >= 3:
+                match.solo_balls_this_spell = 0
+                old_idx = match.current_solo_bowl_idx
+                next_idx = (old_idx + 1) % len(match.solo_players)
+                
+                # Skip if next bowler is the current batter
+                if next_idx == match.current_solo_bat_idx:
+                    next_idx = (next_idx + 1) % len(match.solo_players)
+                
+                # Check for Banned Players (Skip Logic)
+                # Hum wahi logic use karenge jo change_bowler function me hai
+                # Simple loop to find valid bowler
+                players_count = len(match.solo_players)
+                for i in range(players_count):
+                    temp_idx = (next_idx + i) % players_count
+                    p = match.solo_players[temp_idx]
+                    if temp_idx != match.current_solo_bat_idx and not getattr(p, 'is_bowling_banned', False):
+                        match.current_solo_bowl_idx = temp_idx
+                        break
+                
+                new_bowler = match.solo_players[match.current_solo_bowl_idx]
+                new_bowl_tag = f"<a href='tg://user?id={new_bowler.user_id}'>{new_bowler.first_name}</a>"
+                
+                await asyncio.sleep(1)
+                await context.bot.send_message(chat_id, f"🔄 <b>CHANGE OF OVER!</b>\nNew Bowler: {new_bowl_tag} takes the ball.", parse_mode=ParseMode.HTML)
+            
+            await asyncio.sleep(2)
+            await trigger_solo_ball(context, chat_id, match)
 
 # Helper to Rotate Bowler in Solo (Handles the Skip Logic)
 async def rotate_solo_bowler(context, chat_id, match, force_new_bowler=False):
@@ -1548,6 +1608,74 @@ async def rotate_solo_bowler(context, chat_id, match, force_new_bowler=False):
         await context.bot.send_message(chat_id, f"🔄 <b>New Bowler:</b> {new_bowler.first_name}", parse_mode=ParseMode.HTML)
 
     await trigger_solo_ball(context, chat_id, match)
+
+async def handle_milestone_celebration(context, chat_id, player, milestone_type):
+    """Handles Celebrations for 50, 100, and Hattrick"""
+    
+    # Player Tag
+    tag = f"<a href='tg://user?id={player.user_id}'>{player.first_name}</a>"
+    
+    gif = None
+    msg = ""
+
+    # --- CONFIGURATION (GIFs & TEXT) ---
+    if milestone_type == "50":
+        # Half Century GIF
+        gif = "CgACAgQAAxkBAAICZ2lOxFzvUZsdTm6AH39E-yKSadegAAJWDwACc_YgU492NIKJ7uJBNgQ" 
+        msg = "🌟 <b>MAGNIFICENT HALF-CENTURY!</b> 🌟\n"
+        msg += "━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        msg += f"🔥 <b>{tag} raises the bat!</b>\n"
+        msg += "👏 50 Runs up on the board.\n"
+        msg += "What a composed innings! Keep going!\n"
+        msg += "━━━━━━━━━━━━━━━━━━━━━━━━"
+        
+    elif milestone_type == "100":
+        # Century GIF
+        gif = "CgACAgUAAxkBAAICaGlOxHe9UcngczC71Xy0ywI2LgHgAAIhBgACJWaIVfqaVvM3hrKNNgQ"
+        msg = "👑 <b>A LEGENDARY CENTURY!</b> 👑\n"
+        msg += "━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        msg += f"💯 <b>{tag} BOWS TO THE CROWD!</b>\n"
+        msg += "⚔️ 100 Runs of pure class!\n"
+        msg += "Take a bow, champion! This is masterclass.\n"
+        msg += "━━━━━━━━━━━━━━━━━━━━━━━━"
+        
+    elif milestone_type == "hattrick":
+        # Hattrick GIF
+        gif = "CgACAgIAAxkBAAICeGlOxYGeJYwglDx-99aXZZuzhF6HAAIjfQACcfxgSL57ZDILFDxTNgQ"
+        msg = "🎩 <b>HATTRICK HERO!</b> 🎩\n"
+        msg += "━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        msg += f"🔥 <b>{tag} IS ON FIRE!</b>\n"
+        msg += "3️⃣ Wickets in 3 Balls!\n"
+        msg += "Simply unplayable! The batting lineup is destroyed!\n"
+        msg += "━━━━━━━━━━━━━━━━━━━━━━━━"
+
+    # --- SEND ANIMATION ---
+    try:
+        await context.bot.send_animation(chat_id, gif, caption=msg, parse_mode=ParseMode.HTML)
+    except:
+        await context.bot.send_message(chat_id, msg, parse_mode=ParseMode.HTML)
+
+async def solo_join_countdown(context: ContextTypes.DEFAULT_TYPE, chat_id: int, match: Match):
+    """Updates the Solo Joining Board every 10 seconds"""
+    try:
+        while match.phase == GamePhase.SOLO_JOINING:
+            remaining = match.solo_join_end_time - time.time()
+            
+            # Agar time khatam ho jaye, toh loop band karo (Auto-start logic optional hai)
+            if remaining <= 0:
+                break
+            
+            # Wait 10 seconds
+            await asyncio.sleep(10)
+            
+            # Update Board (Sirf tab agar phase change nahi hua)
+            if match.phase == GamePhase.SOLO_JOINING:
+                await update_solo_board(context, chat_id, match)
+                
+    except asyncio.CancelledError:
+        pass
+    except Exception as e:
+        logger.error(f"Solo Timer Error: {e}")
 
 # Start command handler
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1852,6 +1980,7 @@ async def mode_selection_callback(update: Update, context: ContextTypes.DEFAULT_
     await query.answer()
     
     chat = query.message.chat
+    user = query.from_user  # ✅ User yaha define kiya taaki niche use ho sake
     
     if chat.id in active_matches:
         await query.message.reply_text("⚠️ Match already active!")
@@ -1864,7 +1993,7 @@ async def mode_selection_callback(update: Update, context: ContextTypes.DEFAULT_
 
     # --- TEAM MODE ---
     elif query.data == "mode_team":
-        await start_team_mode(query, context, chat, query.from_user)
+        await start_team_mode(query, context, chat, user)
         
     # --- SOLO MODE ---
     elif query.data == "mode_solo":
@@ -1877,6 +2006,7 @@ async def mode_selection_callback(update: Update, context: ContextTypes.DEFAULT_
         match.host_id = user.id 
         match.host_name = user.first_name 
         
+        # 2 Minutes Timer
         match.solo_join_end_time = time.time() + 120 
         
         active_matches[chat.id] = match
@@ -1886,8 +2016,14 @@ async def mode_selection_callback(update: Update, context: ContextTypes.DEFAULT_
         p = Player(user.id, user.username or "", user.first_name)
         match.solo_players.append(p)
         
-        # Board Update
+        # Board Update (Display Initial Message)
         await update_solo_board(context, chat.id, match)
+
+        # ✅ CRITICAL FIX: Timer Task Start karo
+        # Iske bina countdown update nahi hoga
+        match.join_phase_task = asyncio.create_task(
+            solo_join_countdown(context, chat.id, match)
+        )
 
 async def update_solo_board(context, chat_id, match):
     """Updates the Solo Joining List with Host Tag"""
@@ -3813,7 +3949,7 @@ async def handle_batsman_timeout(context: ContextTypes.DEFAULT_TYPE, group_id: i
         )
 
 async def process_ball_result(context: ContextTypes.DEFAULT_TYPE, group_id: int, match: Match):
-    """Calculate Result with Run Rate & Required Run Rate"""
+    """Calculate Result with Run Rate, RRR & Milestones"""
     
     bat_team = match.current_batting_team
     bowl_team = match.current_bowling_team
@@ -3830,12 +3966,16 @@ async def process_ball_result(context: ContextTypes.DEFAULT_TYPE, group_id: int,
     striker = bat_team.players[bat_team.current_batsman_idx]
     bowler = bowl_team.players[bowl_team.current_bowler_idx]
     
+    # Init consecutive wickets
+    if not hasattr(bowler, 'consecutive_wickets'): bowler.consecutive_wickets = 0
+
     # ===== WIDE BALL CHECK (2.5% Chance) =====
     is_wide = random.random() < 0.025
     
     if is_wide:
         bat_team.score += 1
         bat_team.extras += 1
+        # Wides don't break hattrick usually, but don't count as legal ball
         
         gif_url = get_random_gif(MatchEvent.WIDE)
         commentary = get_random_commentary("wide")
@@ -3845,15 +3985,6 @@ async def process_ball_result(context: ContextTypes.DEFAULT_TYPE, group_id: int,
         msg += f"💬 <i>{commentary}</i>\n\n"
         msg += f"📊 <b>Score:</b> {bat_team.score}/{bat_team.wickets}"
         
-        current_rr = round(bat_team.score / max(bat_team.overs, 0.1), 2)
-        msg += f"\n📈 <b>Run Rate:</b> {current_rr}"
-        
-        if match.innings == 2:
-            runs_needed = match.target - bat_team.score
-            balls_left = (match.total_overs * 6) - bat_team.balls
-            rrr = round((runs_needed / max(balls_left, 1)) * 6, 2) if balls_left > 0 else 0
-            msg += f"\n🎯 <b>Need:</b> {runs_needed} runs in {balls_left} balls (RRR: {rrr})"
-        
         try:
             if gif_url:
                 await context.bot.send_animation(group_id, animation=gif_url, caption=msg, parse_mode=ParseMode.HTML)
@@ -3862,7 +3993,6 @@ async def process_ball_result(context: ContextTypes.DEFAULT_TYPE, group_id: int,
         except:
             await context.bot.send_message(group_id, msg, parse_mode=ParseMode.HTML)
         
-        # Wide doesn't count as legal ball
         match.current_ball_data = {}
         await asyncio.sleep(2)
         await execute_ball(context, group_id, match)
@@ -3871,13 +4001,14 @@ async def process_ball_result(context: ContextTypes.DEFAULT_TYPE, group_id: int,
     # ===== WICKET CHECK =====
     if bowler_num == batsman_num:
         if match.is_free_hit:
-            # Free Hit: Half runs awarded, NOT OUT
+            # Free Hit Logic (Runs awarded, Not Out)
             half_runs = batsman_num // 2
             bat_team.score += half_runs
             striker.runs += half_runs
             striker.balls_faced += 1
             bowler.balls_bowled += 1
             bowler.runs_conceded += half_runs
+            bowler.consecutive_wickets = 0 # Reset on runs
             
             gif_url = get_random_gif(MatchEvent.FREE_HIT)
             msg = f"⚡ <b>FREE HIT SAVE!</b> Numbers matched ({batsman_num}).\n"
@@ -3895,15 +4026,6 @@ async def process_ball_result(context: ContextTypes.DEFAULT_TYPE, group_id: int,
             match.is_free_hit = False
             bowl_team.update_overs()
             
-            match.ball_by_ball_log.append({
-                "over": format_overs(bowl_team.balls - 1),
-                "batsman": striker.first_name,
-                "bowler": bowler.first_name,
-                "result": f"Free Hit - {half_runs} runs",
-                "runs": half_runs,
-                "is_wicket": False
-            })
-            
         else:
             # NORMAL WICKET
             striker.is_out = True
@@ -3913,6 +4035,7 @@ async def process_ball_result(context: ContextTypes.DEFAULT_TYPE, group_id: int,
             bat_team.wickets += 1
             bowler.wickets += 1
             bowler.balls_bowled += 1
+            bowler.consecutive_wickets += 1 # ⬆️ Increment Hattrick
             
             if striker.runs == 0:
                 striker.ducks = striker.ducks + 1 if hasattr(striker, 'ducks') else 1
@@ -3942,6 +4065,11 @@ async def process_ball_result(context: ContextTypes.DEFAULT_TYPE, group_id: int,
             except:
                 await context.bot.send_message(group_id, msg, parse_mode=ParseMode.HTML)
             
+            # 🎩 HATTRICK CHECK
+            if bowler.consecutive_wickets == 3:
+                await asyncio.sleep(1)
+                await handle_milestone_celebration(context, group_id, bowler, "hattrick")
+
             bowl_team.update_overs()
             
             match.ball_by_ball_log.append({
@@ -3955,60 +4083,45 @@ async def process_ball_result(context: ContextTypes.DEFAULT_TYPE, group_id: int,
             
             await asyncio.sleep(2)
             
-            # Check if innings complete before offering DRS
             if match.is_innings_complete():
                 await end_innings(context, group_id, match)
                 return
             
-            # ✅ Offer DRS to Captain (10 seconds timeout)
             if bat_team.drs_remaining > 0:
                 await offer_drs_to_captain(context, group_id, match)
                 return
             else:
-                # No DRS available, confirm wicket and continue
                 await confirm_wicket_and_continue(context, group_id, match)
                 return
     
     # ===== RUNS SCORED =====
     else:
         runs = batsman_num
+        old_runs = striker.runs # 💾 Save old runs
+        
         bat_team.score += runs
         striker.runs += runs
         striker.balls_faced += 1
         bowler.balls_bowled += 1
         bowler.runs_conceded += runs
+        bowler.consecutive_wickets = 0 # ⬇️ Reset Hattrick
         
         if runs == 4:
             striker.boundaries = striker.boundaries + 1 if hasattr(striker, 'boundaries') else 1
         elif runs == 6:
             striker.sixes = striker.sixes + 1 if hasattr(striker, 'sixes') else 1
         
-        if runs == 0:
-            commentary_key = "dot"
-            event = MatchEvent.DOT_BALL
-            striker.dot_balls_faced += 1
-            bowler.dot_balls_bowled += 1
-        elif runs == 1:
-            commentary_key = "single"
-            event = MatchEvent.RUNS_1
-        elif runs == 2:
-            commentary_key = "double"
-            event = MatchEvent.RUNS_2
-        elif runs == 3:
-            commentary_key = "triple"
-            event = MatchEvent.RUNS_3
-        elif runs == 4:
-            commentary_key = "boundary"
-            event = MatchEvent.RUNS_4
-        elif runs == 5:
-            commentary_key = "five"
-            event = MatchEvent.RUNS_5
-        else:
-            commentary_key = "six"
-            event = MatchEvent.RUNS_6
+        # ... (GIF & Commentary mapping same as before) ...
+        if runs == 0: event, comm_key = MatchEvent.DOT_BALL, "dot"
+        elif runs == 1: event, comm_key = MatchEvent.RUNS_1, "single"
+        elif runs == 2: event, comm_key = MatchEvent.RUNS_2, "double"
+        elif runs == 3: event, comm_key = MatchEvent.RUNS_3, "triple"
+        elif runs == 4: event, comm_key = MatchEvent.RUNS_4, "boundary"
+        elif runs == 5: event, comm_key = MatchEvent.RUNS_5, "five"
+        else: event, comm_key = MatchEvent.RUNS_6, "six"
         
         gif_url = get_random_gif(event)
-        commentary = get_random_commentary(commentary_key)
+        commentary = get_random_commentary(comm_key)
         
         msg = f"🏏 <b>Over {format_overs(bowl_team.balls)}</b>\n\n"
         if match.is_free_hit:
@@ -4019,6 +4132,7 @@ async def process_ball_result(context: ContextTypes.DEFAULT_TYPE, group_id: int,
         msg += f"💬 <i>{commentary}</i>\n\n"
         msg += f"📊 <b>Score:</b> {bat_team.score}/{bat_team.wickets}"
         
+        # ... (Run Rate & Equation Logic) ...
         current_rr = round(bat_team.score / max(bat_team.overs, 0.1), 2)
         msg += f"\n📈 <b>Run Rate:</b> {current_rr}"
         
@@ -4036,6 +4150,14 @@ async def process_ball_result(context: ContextTypes.DEFAULT_TYPE, group_id: int,
         except:
             await context.bot.send_message(group_id, msg, parse_mode=ParseMode.HTML)
         
+        # 🏆 CHECK MILESTONES (50 / 100)
+        if old_runs < 50 and striker.runs >= 50:
+            await asyncio.sleep(1)
+            await handle_milestone_celebration(context, group_id, striker, "50")
+        elif old_runs < 100 and striker.runs >= 100:
+            await asyncio.sleep(1)
+            await handle_milestone_celebration(context, group_id, striker, "100")
+
         bowl_team.update_overs()
         
         match.ball_by_ball_log.append({
@@ -4052,15 +4174,11 @@ async def process_ball_result(context: ContextTypes.DEFAULT_TYPE, group_id: int,
     
     match.current_ball_data = {}
     
-    # ✅ CRITICAL FIX: Check for over completion AND innings end properly
     if bowl_team.get_current_over_balls() == 0:
-        # Over is complete, request new bowler
         await check_over_complete(context, group_id, match)
     elif match.is_innings_complete():
-        # Innings complete due to target reached or balls exhausted
         await end_innings(context, group_id, match)
     else:
-        # Continue with same bowler for next ball
         await asyncio.sleep(2)
         await execute_ball(context, group_id, match)
 
@@ -4525,10 +4643,11 @@ async def start_solo_mechanics(context, chat_id, match):
     await trigger_solo_ball(context, chat_id, match)
 
 async def trigger_solo_ball(context, chat_id, match):
-    """Sets up the next ball with Timers"""
+    """Sets up the next ball with LIVE Dashboard Format"""
     batter = match.solo_players[match.current_solo_bat_idx]
     bowler = match.solo_players[match.current_solo_bowl_idx]
     
+    # Reset Ball Data
     match.current_ball_data = {
         "bowler_id": bowler.user_id,
         "bowler_number": None,
@@ -4536,33 +4655,50 @@ async def trigger_solo_ball(context, chat_id, match):
         "is_solo": True
     }
     
+    # --- GET BOWLER STATS ---
+    # We use getattr to safely get stats (defaults to 0 if not present yet)
+    runs_given = getattr(bowler, 'runs_conceded', 0)
+    wickets = getattr(bowler, 'wickets', 0)
+    balls = getattr(bowler, 'balls_bowled', 0)
+    
+    # Calculate Overs (e.g., 7 balls = 1.1 overs)
+    overs_display = f"{balls // 6}.{balls % 6}"
+    
+    # Create Name Tags
     bat_tag = f"<a href='tg://user?id={batter.user_id}'>{batter.first_name}</a>"
     bowl_tag = f"<a href='tg://user?id={bowler.user_id}'>{bowler.first_name}</a>"
     
-    # Calculate Strike Rate
-    sr = round((batter.runs / batter.balls_faced) * 100, 1) if batter.balls_faced > 0 else 0
-    
-    msg = f"⚔️ <b>SOLO BATTLE ARENA</b>\n"
+    # --- BUILD THE LIVE MESSAGE ---
+    msg = "🔴 <b>LIVE</b>\n"
     msg += "━━━━━━━━━━━━━━━━━━━━━\n"
-    msg += f"📊 <b>Score:</b> {batter.runs} Runs ({batter.balls_faced} balls, SR: {sr})\n"
-    msg += f"🔄 <b>Spell:</b> Ball {match.solo_balls_this_spell + 1}/3\n"
-    msg += "━━━━━━━━━━━━━━━━━━━━━\n\n"
-    msg += f"🏏 <b>{bat_tag}</b>  🆚  ⚾ <b>{bowl_tag}</b>\n\n"
-    msg += f"📣 <b>{bowler.first_name}</b> is steaming in..."
+    msg += f"👤 <b>{bowl_tag} : {runs_given}/{wickets}</b>\n"
+    msg += f"📊 <b>Total {bowler.first_name} Over: {overs_display}</b>\n"
+    msg += "━━━━━━━━━━━━━━━━━━━━━\n"
+    msg += f"⚾ <b>{bowler.first_name} is running in for bowl...</b>\n"
+    msg += "━━━━━━━━━━━━━━━━━━━━━"
     
+    # Button to go to Bot PM
     keyboard = [[InlineKeyboardButton("📩 Tap to Bowl", url=f"https://t.me/{context.bot.username}")]]
     
-    ball_gif = "https://t.me/kyanaamrkhe/6"
+    # Send the Message (Text Mode as per your example)
     try:
-        await context.bot.send_animation(chat_id, ball_gif, caption=msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.HTML)
-    except:
-        await context.bot.send_message(chat_id, msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.HTML)
+        await context.bot.send_message(
+            chat_id, 
+            msg, 
+            reply_markup=InlineKeyboardMarkup(keyboard), 
+            parse_mode=ParseMode.HTML
+        )
+    except Exception as e:
+        # Fallback in case of error
+        await context.bot.send_message(chat_id, msg, parse_mode=ParseMode.HTML)
     
-    # DM Bowler
+    # --- DM THE BOWLER ---
     try:
         dm_msg = f"⚔️ <b>SOLO MATCH</b>\n"
-        dm_msg += f"🎯 Target: <b>{batter.first_name}</b> (Runs: {batter.runs})\n"
+        dm_msg += f"🎯 Batsman: <b>{batter.first_name}</b> (Runs: {batter.runs})\n"
+        dm_msg += f"🔥 Runs: (Runs: {batter.runs})\n"
         dm_msg += "👉 Send your number (0-6)"
+        
         await context.bot.send_message(bowler.user_id, dm_msg, parse_mode=ParseMode.HTML)
         
         # ✅ START BOWLER TIMER
@@ -4573,10 +4709,16 @@ async def trigger_solo_ball(context, chat_id, match):
         await context.bot.send_message(chat_id, f"⚠️ Cannot DM {bowl_tag}. Please start the bot!", parse_mode=ParseMode.HTML)
 
 async def process_solo_turn_result(context, chat_id, match):
-    """Calculates Solo result with STRICT GIF Mapping for ALL runs"""
+    """Calculates Solo result, Stats, LIVE Board & MILESTONES"""
     batter = match.solo_players[match.current_solo_bat_idx]
     bowler = match.solo_players[match.current_solo_bowl_idx]
     
+    # ✅ Initialize Stats if missing
+    if not hasattr(bowler, 'runs_conceded'): bowler.runs_conceded = 0
+    if not hasattr(bowler, 'wickets'): bowler.wickets = 0
+    if not hasattr(bowler, 'balls_bowled'): bowler.balls_bowled = 0
+    if not hasattr(bowler, 'consecutive_wickets'): bowler.consecutive_wickets = 0 # New Tracking
+
     bat_num = match.current_ball_data["batsman_number"]
     bowl_num = match.current_ball_data["bowler_number"]
     
@@ -4588,17 +4730,25 @@ async def process_solo_turn_result(context, chat_id, match):
         batter.is_out = True
         match.solo_balls_this_spell = 0
         
+        # Update Stats
+        bowler.wickets += 1
+        bowler.balls_bowled += 1
+        bowler.consecutive_wickets += 1  # ⬆️ Increment Hattrick Counter
+        
         gif = get_random_gif(MatchEvent.WICKET)
         commentary = get_random_commentary("wicket")
-        
         sr = round((batter.runs / batter.balls_faced) * 100, 1) if batter.balls_faced > 0 else 0
         
-        msg = f"❌ <b>OUT! {batter.first_name} is gone!</b>\n"
+        # Normal Wicket Msg
+        msg = "🔴 <b>LIVE</b>\n"
         msg += "━━━━━━━━━━━━━━━━━━━━━\n"
-        msg += f"🏏 <b>Final Score:</b> {batter.runs} ({batter.balls_faced})\n"
-        msg += f"⚡ <b>Strike Rate:</b> {sr}\n"
-        msg += f"🎯 <b>Wicket:</b> {bowl_tag}\n\n"
-        msg += f"💬 <i>{commentary}</i>"
+        msg += f"❌ <b>OUT! {bat_tag} is gone!</b>\n"
+        msg += f"🎯 <b>Wicket by:</b> {bowl_tag}\n"
+        msg += "━━━━━━━━━━━━━━━━━━━━━\n"
+        msg += f"📊 <b>Score:</b> {batter.runs} ({batter.balls_faced})\n"
+        msg += f"⚡ <b>SR:</b> {sr}\n"
+        msg += f"💬 <i>{commentary}</i>\n"
+        msg += "━━━━━━━━━━━━━━━━━━━━━"
         
         try:
             if gif:
@@ -4607,9 +4757,14 @@ async def process_solo_turn_result(context, chat_id, match):
                 await context.bot.send_message(chat_id, msg, parse_mode=ParseMode.HTML)
         except:
             await context.bot.send_message(chat_id, msg, parse_mode=ParseMode.HTML)
+            
+        # 🎩 CHECK HATTRICK CELEBRATION
+        if bowler.consecutive_wickets == 3:
+            await asyncio.sleep(1) # Thoda pause
+            await handle_milestone_celebration(context, chat_id, bowler, "hattrick")
         
+        # Next Batsman Logic
         match.current_solo_bat_idx += 1
-        
         if match.current_solo_bat_idx >= len(match.solo_players):
             await end_solo_game_logic(context, chat_id, match)
             return
@@ -4621,49 +4776,37 @@ async def process_solo_turn_result(context, chat_id, match):
         await asyncio.sleep(2)
         await context.bot.send_message(chat_id, f"⚡ <b>NEXT BATSMAN:</b> {new_bat_tag} walks to the crease!", parse_mode=ParseMode.HTML)
         
-    # --- RUNS LOGIC (STRICT GIF MAPPING) ---
+    # --- RUNS LOGIC ---
     else:
         runs = bat_num
+        old_runs = batter.runs # 💾 Store Old Runs for logic
         batter.runs += runs
         batter.balls_faced += 1
         
-        # ✅ EXACT GIF MAPPING (0-6)
-        if runs == 0:
-            event = MatchEvent.DOT_BALL
-            comm_key = "dot"
-        elif runs == 1:
-            event = MatchEvent.RUNS_1
-            comm_key = "single"
-        elif runs == 2:
-            event = MatchEvent.RUNS_2
-            comm_key = "double"
-        elif runs == 3:
-            event = MatchEvent.RUNS_3
-            comm_key = "triple"
-        elif runs == 4:
-            event = MatchEvent.RUNS_4
-            comm_key = "boundary"
-        elif runs == 5:
-            event = MatchEvent.RUNS_5
-            comm_key = "five"
-        elif runs == 6:
-            event = MatchEvent.RUNS_6
-            comm_key = "six"
+        # Bowler Stats
+        bowler.runs_conceded += runs
+        bowler.balls_bowled += 1
+        bowler.consecutive_wickets = 0  # ⬇️ Reset Hattrick Counter (Run scored)
+        
+        # GIF Mapping
+        if runs == 0: event, comm_key = MatchEvent.DOT_BALL, "dot"
+        elif runs == 1: event, comm_key = MatchEvent.RUNS_1, "single"
+        elif runs == 2: event, comm_key = MatchEvent.RUNS_2, "double"
+        elif runs == 3: event, comm_key = MatchEvent.RUNS_3, "triple"
+        elif runs == 4: event, comm_key = MatchEvent.RUNS_4, "boundary"
+        elif runs == 5: event, comm_key = MatchEvent.RUNS_5, "five"
+        elif runs == 6: event, comm_key = MatchEvent.RUNS_6, "six"
         
         gif = get_random_gif(event)
         commentary = get_random_commentary(comm_key)
         
-        sr = round((batter.runs / batter.balls_faced) * 100, 1) if batter.balls_faced > 0 else 0
-        
-        msg = f"🏏 <b>{runs} RUN{'S' if runs != 1 else ''}!</b>\n"
+        msg = "🔴 <b>LIVE</b>\n"
         msg += "━━━━━━━━━━━━━━━━━━━━━\n"
-        msg += f"📊 <b>{batter.first_name}:</b> {batter.runs} ({batter.balls_faced})\n"
-        msg += f"⚡ <b>Strike Rate:</b> {sr}\n"
-        msg += f"💬 <i>{commentary}</i>\n\n"
-        msg += f"🔥 <b>KEEP PLAYING!</b>"
+        msg += f"🏃 <b>{runs} RUN{'S' if runs != 1 else ''}!</b>\n"
+        msg += f"💬 <i>{commentary}</i>\n"
+        msg += "━━━━━━━━━━━━━━━━━━━━━"
         
         try:
-            # ✅ FORCE GIF for ALL runs
             if gif:
                 await context.bot.send_animation(chat_id, gif, caption=msg, parse_mode=ParseMode.HTML)
             else:
@@ -4671,8 +4814,19 @@ async def process_solo_turn_result(context, chat_id, match):
         except:
             await context.bot.send_message(chat_id, msg, parse_mode=ParseMode.HTML)
 
+        # 🏆 CHECK BATTING MILESTONES (50 / 100)
+        # Condition: Pehle run 50 se kam the, ab 50 ya usse jyada hain
+        if old_runs < 50 and batter.runs >= 50:
+            await asyncio.sleep(1)
+            await handle_milestone_celebration(context, chat_id, batter, "50")
+            
+        # Condition: Pehle run 100 se kam the, ab 100 ya usse jyada hain
+        elif old_runs < 100 and batter.runs >= 100:
+            await asyncio.sleep(1)
+            await handle_milestone_celebration(context, chat_id, batter, "100")
+
+        # Over Change Logic
         match.solo_balls_this_spell += 1
-        
         if match.solo_balls_this_spell >= 3:
             match.solo_balls_this_spell = 0
             
@@ -4682,8 +4836,16 @@ async def process_solo_turn_result(context, chat_id, match):
             if next_idx == match.current_solo_bat_idx:
                 next_idx = (next_idx + 1) % len(match.solo_players)
                 
-            match.current_solo_bowl_idx = next_idx
-            new_bowler = match.solo_players[next_idx]
+            # Skip Banned Loop (Same as before)
+            players_count = len(match.solo_players)
+            for i in range(players_count):
+                temp_idx = (next_idx + i) % players_count
+                p = match.solo_players[temp_idx]
+                if temp_idx != match.current_solo_bat_idx and not getattr(p, 'is_bowling_banned', False):
+                    match.current_solo_bowl_idx = temp_idx
+                    break
+
+            new_bowler = match.solo_players[match.current_solo_bowl_idx]
             new_bowl_tag = f"<a href='tg://user?id={new_bowler.user_id}'>{new_bowler.first_name}</a>"
             
             await asyncio.sleep(1)
@@ -6489,7 +6651,7 @@ async def handle_group_input(update: Update, context: ContextTypes.DEFAULT_TYPE)
                         processed = True
 
 async def handle_dm_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle DM Input with Safety Check & GIF for Solo Mode"""
+    """Handle DM Input with Safety Check & LIVE Scoreboard Notification"""
     user = update.effective_user
     if not update.message or not update.message.text: return
     
@@ -6503,47 +6665,41 @@ async def handle_dm_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     for gid, match in active_matches.items():
         current_mode = getattr(match, "game_mode", "TEAM") 
         
-        # --- SOLO LOGIC (UPDATED) ---
+        # --- SOLO LOGIC (Already Updated) ---
         if current_mode == "SOLO" and match.phase == GamePhase.SOLO_MATCH:
+            # ... (Previous Solo Logic Code kept as is) ...
             if match.current_solo_bowl_idx < len(match.solo_players):
                 bowler = match.solo_players[match.current_solo_bowl_idx]
-                
                 if user.id == bowler.user_id and match.current_ball_data.get("bowler_number") is None:
                     match.current_ball_data["bowler_number"] = num
-                    
-                    # ✅ STOP BOWLER TIMER
-                    if match.ball_timeout_task: 
-                        match.ball_timeout_task.cancel()
-                    
+                    if match.ball_timeout_task: match.ball_timeout_task.cancel()
                     await update.message.reply_text(f"✅ <b>Locked:</b> {num}", parse_mode=ParseMode.HTML)
                     
-                    # Notify Group with Batting GIF
                     if match.current_solo_bat_idx < len(match.solo_players):
                         batter = match.solo_players[match.current_solo_bat_idx]
+                        sr = round((batter.runs / batter.balls_faced) * 100, 1) if batter.balls_faced > 0 else 0
+                        bat_tag = f"<a href='tg://user?id={batter.user_id}'>{batter.first_name}</a>"
                         
-                        notification_msg = f"⚾ <b>Ball Delivered!</b>\n"
-                        notification_msg += f"🏏 <b>{batter.first_name}</b>, hit now!"
+                        notification_msg = "🔴 <b>LIVE</b>\n"
+                        notification_msg += "━━━━━━━━━━━━━━━━━━━━━\n"
+                        notification_msg += f"👤 <b>{bat_tag}:</b> {batter.runs} ({batter.balls_faced})\n"
+                        notification_msg += f"⚡ <b>Strike Rate:</b> {sr}\n"
+                        notification_msg += "━━━━━━━━━━━━━━━━━━━━━\n"
+                        notification_msg += f"🔥 <b>{batsman.first_name}</b>, Make a shot that impact the score\n"
+                        notification_msg += "━━━━━━━━━━━━━━━━━━━━━"
                         
-                        # Batting GIF (Updated Link)
                         batting_gif = "https://t.me/kyanaamrkhe/7"
-                        
                         try:
-                            await context.bot.send_animation(
-                                gid, 
-                                animation=batting_gif, 
-                                caption=notification_msg, 
-                                parse_mode=ParseMode.HTML
-                            )
+                            await context.bot.send_animation(gid, animation=batting_gif, caption=notification_msg, parse_mode=ParseMode.HTML)
                         except:
                             await context.bot.send_message(gid, notification_msg, parse_mode=ParseMode.HTML)
-                            
-                        # ✅ START BATSMAN TIMER (Critical Fix)
+                        
                         match.ball_timeout_task = asyncio.create_task(
                             solo_game_timer(context, gid, match, "batsman", batter.first_name)
                         )
                     return
 
-        # --- TEAM LOGIC (Existing) ---
+        # --- TEAM LOGIC (UPDATED THIS PART) ---
         elif current_mode == "TEAM" and match.phase == GamePhase.MATCH_IN_PROGRESS:
              if match.current_bowling_team and match.current_bowling_team.current_bowler_idx is not None:
                  if match.current_bowling_team.current_bowler_idx < len(match.current_bowling_team.players):
@@ -6554,30 +6710,50 @@ async def handle_dm_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             match.current_ball_data["bowler_number"] = num
                             match.current_ball_data["bowler_id"] = user.id
                             
+                            # Cancel Bowler Timer
                             if match.ball_timeout_task: match.ball_timeout_task.cancel()
                             
                             keyboard = [[InlineKeyboardButton("🔙 Return to Group", url=f"https://t.me/{context.bot.username}")]]
                             await update.message.reply_text(f"✅ <b>Delivery Locked:</b> {num}", parse_mode=ParseMode.HTML)
                             
-                            # Group Notification
+                            # --- GROUP NOTIFICATION (UPDATED) ---
                             bat_team = match.current_batting_team
                             if bat_team.current_batsman_idx is not None:
                                 striker = bat_team.players[bat_team.current_batsman_idx]
-                                msg = f"⚾ <b>Ball Delivered!</b>\n🏏 <b>{striker.first_name}</b>, play your shot!"
+                                bat_tag = f"<a href='tg://user?id={striker.user_id}'>{striker.first_name}</a>"
                                 
-                                # Batting GIF for Team Mode
+                                # Calculate Stats
+                                sr = round((striker.runs / striker.balls_faced) * 100, 1) if striker.balls_faced > 0 else 0
+                                
+                                # ✅ NEW LIVE MESSAGE FORMAT
+                                msg = "🔴 <b>LIVE</b>\n"
+                                msg += "━━━━━━━━━━━━━━━━━━━━━\n"
+                                msg += f"👤 <b>{bat_tag}:</b> {striker.runs} ({striker.balls_faced})\n"
+                                msg += f"⚡ <b>Strike Rate:</b> {sr}\n"
+                                msg += "━━━━━━━━━━━━━━━━━━━━━\n"
+                                msg += f"🔥 <b>{batsman.first_name}</b>, Make a shot that impact the score\n"
+                                msg += "━━━━━━━━━━━━━━━━━━━━━"
+                                
+                                # Batting GIF
                                 batting_gif = "https://t.me/kyanaamrkhe/7"
                                 try:
                                     await context.bot.send_animation(gid, animation=batting_gif, caption=msg, parse_mode=ParseMode.HTML)
                                 except:
                                     await context.bot.send_message(gid, msg, parse_mode=ParseMode.HTML)
                                 
+                                # Start Batsman Timer
                                 match.ball_timeout_task = asyncio.create_task(
                                     game_timer(context, gid, match, "batsman", striker.first_name)
                                 )
                          return
 
-# Main function
+# --- TEMPORARY: File ID Extractor ---
+async def get_file_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Send any GIF to bot and get its File ID"""
+    if update.message.animation:
+        file_id = update.message.animation.file_id
+        await update.message.reply_text(f"File ID:\n`{file_id}`", parse_mode=ParseMode.MARKDOWN)
+
 # Main function
 def main():
     """Start the bot"""
@@ -6593,6 +6769,10 @@ def main():
         .connect_timeout(60)
         .build()
     )
+    
+    # --- TEMPORARY: File ID Handler ---
+    # (Ye line sahi indentation ke saath hai ab)
+    application.add_handler(MessageHandler(filters.ANIMATION, get_file_id))
     
     # --- JOBS (Scheduled Tasks) ---
     if application.job_queue:
@@ -6650,7 +6830,7 @@ def main():
     application.add_handler(CallbackQueryHandler(toss_decision_callback, pattern="^toss_decision_"))
     application.add_handler(CallbackQueryHandler(set_edit_team_callback, pattern="^(edit_team_|edit_back)"))
     
-    # ✅ CORRECT STATS HANDLERS (Fixed NameError)
+    # CORRECT STATS HANDLERS
     application.add_handler(CallbackQueryHandler(stats_view_callback, pattern="^stats_view_"))
     application.add_handler(CallbackQueryHandler(stats_main_callback, pattern="^stats_main_")) 
 
@@ -6663,7 +6843,7 @@ def main():
     
     # Add error handler
     application.add_error_handler(error_handler)
-    
+
     # Start bot
     logger.info("Cricoverse bot starting...")
     application.run_polling(allowed_updates=Update.ALL_TYPES)
